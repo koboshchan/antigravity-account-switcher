@@ -548,24 +548,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	currentQuery := origQuery
 	currentBody := origBody
 
-	// Force primary model configured in the dashboard (source of truth) unless client already requests secondary
-	if isCloudCode && !isPassThrough && h.failoverEngine != nil {
-		h.failoverEngine.mu.RLock()
-		primary := h.failoverEngine.modelPrimary
-		secondary := h.failoverEngine.modelSecondary
-		h.failoverEngine.mu.RUnlock()
-
-		if primary != "" && origModel != "" &&
-			NormalizeModelName(origModel) != NormalizeModelName(primary) &&
-			(secondary == "" || NormalizeModelName(origModel) != NormalizeModelName(secondary)) {
-			buffered = h.rewriteRequestModel(r, buffered, primary)
-			origModel = primary
-			currentModel = primary
-			currentPath = r.URL.Path
-			currentQuery = r.URL.RawQuery
-			currentBody = buffered.Bytes()
-		}
-	}
+	// Preserve the client's selected model, including IDs newer than our catalog.
+	// Dashboard primary/secondary settings only govern opt-in quota fallback;
+	// they must not silently replace every incoming model selection.
 
 	// Predictive fallback check before initial upstream dispatch
 	if isCloudCode && !isPassThrough && currentAcc != nil && origModel != "" {
