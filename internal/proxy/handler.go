@@ -9,13 +9,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/config"
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
 )
 
@@ -376,101 +374,6 @@ func (h *ProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// rewriteRequestModel rewrites the model in request URL path, query string,
-// in-memory buffered body, and transport headers without modifying other parts of the request.
-func (h *ProxyHandler) rewriteRequestModel(
-	r *http.Request,
-	buffered *BufferedRequest,
-	targetModel string,
-) *BufferedRequest {
-	if r == nil || targetModel == "" || buffered == nil {
-		return buffered
-	}
-
-	newPath := RewriteModelInPath(r.URL.Path, targetModel)
-	newQuery := r.URL.RawQuery
-	if newQuery != "" {
-		newQuery = RewriteModelInQuery(newQuery, targetModel)
-	}
-
-	newBodyBytes := buffered.Bytes()
-	if len(newBodyBytes) > 0 {
-		if rewrittenBody, err := RewriteModelInBody(newBodyBytes, targetModel); err == nil {
-			newBodyBytes = rewrittenBody
-		}
-	}
-
-	newBuffered := &BufferedRequest{Body: newBodyBytes}
-	SynchronizeRequest(r, newBodyBytes, newPath, newQuery)
-	return newBuffered
-}
-
-// applyPredictiveFallback checks whether the incoming request targets an exhausted primary
-// model on the active account, and if so, proactively rewrites it to the secondary model.
-// Returns the updated BufferedRequest, the effective model name, and whether rewrite occurred.
-func (h *ProxyHandler) applyPredictiveFallback(
-	ctx context.Context,
-	acc *domain.Account,
-	r *http.Request,
-	buffered *BufferedRequest,
-) (*BufferedRequest, string, bool) {
-	if h.failoverEngine == nil || acc == nil || r == nil || buffered == nil {
-		return buffered, "", false
-	}
-
-	reqModel, _, _ := ExtractModelFromRequest(r, buffered.Bytes())
-	if reqModel == "" {
-		return buffered, "", false
-	}
-
-	shouldRewrite, targetModel, err := h.failoverEngine.PredictiveCheck(ctx, acc, reqModel)
-	if err != nil || !shouldRewrite || targetModel == "" {
-		return buffered, reqModel, false
-	}
-
-	newBuffered := h.rewriteRequestModel(r, buffered, targetModel)
-	return newBuffered, targetModel, true
-}
-
-// syncFallbackConfigFromEnv dynamically reconciles the failover engine's fallback configuration
-// with environment variable overrides if they are set (e.g. in E2E tests or runtime reconfigurations).
-func (h *ProxyHandler) syncFallbackConfigFromEnv() {
-	if h.failoverEngine == nil {
-		return
-	}
-	envFallback := os.Getenv("ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED")
-	envPri := os.Getenv("ANTIGRAVITY_MODEL_PRIMARY")
-	envSec := os.Getenv("ANTIGRAVITY_MODEL_SECONDARY")
-	if envFallback == "" && envPri == "" && envSec == "" {
-		return
-	}
-
-	h.failoverEngine.mu.RLock()
-	pri := h.failoverEngine.modelPrimary
-	sec := h.failoverEngine.modelSecondary
-	enabled := h.failoverEngine.fallbackSecondaryEnabled
-	h.failoverEngine.mu.RUnlock()
-
-	changed := false
-	if envPri != "" && strings.TrimSpace(envPri) != "" && strings.TrimSpace(envPri) != pri {
-		pri = strings.TrimSpace(envPri)
-		changed = true
-	}
-	if envSec != "" && strings.TrimSpace(envSec) != "" && strings.TrimSpace(envSec) != sec {
-		sec = strings.TrimSpace(envSec)
-		changed = true
-	}
-	if envFallback != "" {
-		if b, err := config.ParseBool(envFallback); err == nil && b != enabled {
-			enabled = b
-			changed = true
-		}
-	}
-	if changed {
-		h.failoverEngine.SetFallbackConfig(pri, sec, enabled)
-	}
-}
-
 // ServeHTTP handles incoming reverse and forward proxy requests, performs request buffering,
 // dynamically injects active account Bearer tokens, retries upon HTTP 429 quota exhaustion,
 // and streams SSE responses line-by-line while capturing token usage metrics.
@@ -480,9 +383,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleConnect(w, r)
 		return
 	}
-
-	// Reconcile fallback configuration with environment variables if set
-	h.syncFallbackConfigFromEnv()
 
 	// 1. Buffer request body up to configured limit for zero-error re-readability on failover
 	buffered, err := NewBufferedRequestWithLimit(r, h.cfg.MaxBodyBytes)
@@ -507,21 +407,29 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	isCloudCode := !isExplicitForwardToOther
 
+	origModel, _, _ := ExtractModelFromRequest(r, buffered.Bytes())
 	var currentAcc *domain.Account
 	isPassThrough := false
 
 	if isCloudCode {
 		// Resolve active account from repository
 		acc, accErr := h.accountRepo.GetActive(ctx)
+		if h.failoverEngine != nil {
+			acc, accErr = h.failoverEngine.ResolveForModel(ctx, origModel)
+		}
 		if accErr != nil || acc == nil {
 			nextAcc, nextErr := h.accountRepo.GetNextAvailable(ctx, "")
+			if modelFamily(origModel) != "" {
+				nextAcc, nextErr = nil, domain.ErrNoAvailableAccount
+			}
 			if nextErr == nil && nextAcc != nil {
 				_ = h.accountRepo.SetActive(ctx, nextAcc.ID)
 				currentAcc = nextAcc
 			} else {
 				// No accounts in pool: if client provided an Authorization header, pass it through;
 				// otherwise, return 503 Service Unavailable
-				if r.Header.Get("Authorization") != "" {
+				accounts, listErr := h.accountRepo.List(ctx)
+				if r.Header.Get("Authorization") != "" && listErr == nil && len(accounts) == 0 {
 					isPassThrough = true
 				} else {
 					w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -538,7 +446,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Capture original request baseline
-	origModel, _, _ := ExtractModelFromRequest(r, buffered.Bytes())
 	origPath := r.URL.Path
 	origQuery := r.URL.RawQuery
 	origBody := buffered.Bytes()
@@ -549,20 +456,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	currentBody := origBody
 
 	// Preserve the client's selected model, including IDs newer than our catalog.
-	// Dashboard primary/secondary settings only govern opt-in quota fallback;
-	// they must not silently replace every incoming model selection.
-
-	// Predictive fallback check before initial upstream dispatch
-	if isCloudCode && !isPassThrough && currentAcc != nil && origModel != "" {
-		newBuffered, targetModel, rewritten := h.applyPredictiveFallback(ctx, currentAcc, r, buffered)
-		if rewritten {
-			buffered = newBuffered
-			currentModel = targetModel
-			currentPath = r.URL.Path
-			currentQuery = r.URL.RawQuery
-			currentBody = buffered.Bytes()
-		}
-	}
 
 	// 3. Retry loop: attempt upstream request with failover on 429 / RESOURCE_EXHAUSTED
 	var lastRespStatusCode int
@@ -576,17 +469,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if accounts, accErr := h.accountRepo.List(ctx); accErr == nil && len(accounts) > 0 {
 				totalAccounts = len(accounts)
 			}
-			tiers := 1
-			if h.failoverEngine != nil {
-				h.failoverEngine.mu.RLock()
-				if h.failoverEngine.fallbackSecondaryEnabled {
-					tiers = 2
-				}
-				h.failoverEngine.mu.RUnlock()
-			}
-			if dynamicBound := totalAccounts * tiers; dynamicBound > maxAttempts {
-				maxAttempts = dynamicBound
-			}
+			maxAttempts = totalAccounts * 2
 		}
 		if maxAttempts > 50 {
 			maxAttempts = 50
@@ -600,6 +483,15 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Bind credentials to this request model family on every retry.
+		if !isPassThrough && modelFamily(currentModel) != "" {
+			resolved, err := h.failoverEngine.ResolveForModel(ctx, currentModel)
+			if err != nil || resolved == nil {
+				http.Error(w, "no available account for outgoing model family", http.StatusServiceUnavailable)
+				return
+			}
+			currentAcc = resolved
+		}
 		// Proactively refresh access token if expired or near expiration window
 		if !isPassThrough && currentAcc != nil && currentAcc.IsTokenExpired(h.cfg.TokenExpiryMargin) && h.tokenRefresher != nil && currentAcc.RefreshToken != "" {
 			newAccess, newExpiry, refErr := h.tokenRefresher.RefreshToken(ctx, currentAcc.RefreshToken)
@@ -723,7 +615,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						SynchronizeRequest(r, currentBody, currentPath, currentQuery)
 						if h.eventBroadcaster != nil {
 							h.eventBroadcaster.Broadcast(&domain.ProxyEvent{
-								Type:      domain.EventTypeModelFallback,
+								Type:      domain.EventTypeError,
 								AccountID: currentAcc.ID,
 								Message:   fmt.Sprintf("Sanitized thought signatures with skip_thought_signature_validator after 400 error on %s", currentModel),
 								Timestamp: time.Now().UTC(),
@@ -781,70 +673,16 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if h.failoverEngine != nil {
-					action, targetModel, nextAcc, failoverErr := h.failoverEngine.HandleExhaustion(ctx, currentAcc, currentModel)
+
+					_, _, nextAcc, failoverErr := h.failoverEngine.HandleExhaustion(ctx, currentAcc, currentModel)
 					if failoverErr != nil || nextAcc == nil {
-						// Entire account pool is exhausted! Forward upstream 429 response verbatim
 						forwardTerminal()
 						return
 					}
+					discardAndClose()
+					currentAcc = nextAcc
+					continue
 
-					switch action {
-					case ActionFallbackSecondary:
-						discardAndClose()
-						// Intra-account fallback: rewrite to secondary model on SAME account
-						currentModel = targetModel
-						currentPath = RewriteModelInPath(origPath, targetModel)
-						if origQuery != "" {
-							currentQuery = RewriteModelInQuery(origQuery, targetModel)
-						} else {
-							currentQuery = ""
-						}
-						currentBody = origBody
-						if len(origBody) > 0 {
-							if rewritten, rwErr := RewriteModelInBody(origBody, targetModel); rwErr == nil {
-								currentBody = rewritten
-							}
-						}
-						buffered = &BufferedRequest{Body: currentBody}
-						SynchronizeRequest(r, currentBody, currentPath, currentQuery)
-						currentAcc = nextAcc // Same account
-						continue
-
-					case ActionRotateAccount:
-						discardAndClose()
-						// Account rotated: switch to nextAcc, reset back to primary model and original body
-						currentAcc = nextAcc
-						currentModel = origModel
-						currentPath = origPath
-						currentQuery = origQuery
-						currentBody = origBody
-						buffered = &BufferedRequest{Body: currentBody}
-						SynchronizeRequest(r, currentBody, currentPath, currentQuery)
-
-						// Proactive check on new account
-						if origModel != "" {
-							if shouldRewrite, tgtModel, pErr := h.failoverEngine.PredictiveCheck(ctx, currentAcc, origModel); pErr == nil && shouldRewrite {
-								currentModel = tgtModel
-								currentPath = RewriteModelInPath(origPath, tgtModel)
-								if origQuery != "" {
-									currentQuery = RewriteModelInQuery(origQuery, tgtModel)
-								}
-								if len(origBody) > 0 {
-									if rewritten, rwErr := RewriteModelInBody(origBody, tgtModel); rwErr == nil {
-										currentBody = rewritten
-									}
-								}
-								buffered = &BufferedRequest{Body: currentBody}
-								SynchronizeRequest(r, currentBody, currentPath, currentQuery)
-							}
-						}
-						continue
-
-					default:
-						// ActionNone: return upstream response
-						forwardTerminal()
-						return
-					}
 				} else {
 					nextAcc, rotateErr := h.accountRepo.GetNextAvailable(ctx, currentAcc.ID)
 					if rotateErr != nil || nextAcc == nil {

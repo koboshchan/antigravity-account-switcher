@@ -78,27 +78,22 @@
     </div>
   </header>
 
+  <section id="oauth-pending" class="app-container" hidden aria-label="Complete Google sign-in">
+    <p>Finish Google sign-in in the opened window. If its localhost callback cannot open on this device, paste that full callback URL here.</p>
+    <form id="oauth-callback-form"><label for="oauth-callback-url">Callback URL</label>
+      <input id="oauth-callback-url" class="form-input" type="password" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:…/oauth/callback?…" required style="width:100%">
+      <button class="btn btn-primary" type="submit">Complete sign-in</button>
+      <p id="oauth-callback-status" role="status" aria-live="polite">Waiting for authorization.</p>
+    </form>
+  </section>
+
   <!-- Main Content Layout -->
   <main class="main-content app-container">
     <!-- Section 1: Telemetry Command Bar (Integrated Active Account + Quick Stats) -->
     <section class="telemetry-bar" aria-label="System Overview">
-      <!-- Active Account Route Block -->
       <div class="route-block">
-        <div class="route-header">
-          <span class="section-label">Active Routing Route</span>
-          <span id="active-status-badge" class="badge badge-success">ACTIVE</span>
-        </div>
-        <div class="route-email-row">
-          <span id="active-email" class="route-email" title="Resolving active account...">Resolving active account...</span>
-          <button id="btn-copy-active-email" class="btn-copy-mini" title="Copy active email" aria-label="Copy active email address">
-            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
-        </div>
-        <div class="route-meta">
-          <span id="active-details" class="mono">Proxy port: local • HTTP 429 auto-failover armed</span>
-        </div>
+        <div class="route-header"><span class="section-label">Automatic family accounts</span><span class="badge badge-success">AUTO</span></div>
+        <div id="family-active-routes" class="route-meta" style="display:grid;gap:.5rem"><span>Loading family accounts...</span></div>
       </div>
 
       <!-- Live Metric Gauges (Integrated in-line) -->
@@ -141,88 +136,6 @@
       <!-- Dynamic Accounts Grid -->
       <div id="accounts-grid" class="accounts-grid">
         <!-- Account cards rendered dynamically -->
-      </div>
-    </section>
-
-    <!-- Section 2.5: Model Fallback & Routing Strategy -->
-    <section class="panel" aria-labelledby="fallback-section-title">
-      <div class="panel-header">
-        <div class="panel-title-group">
-          <h2 id="fallback-section-title" class="panel-title">
-            Model Fallback & Routing
-            <span id="models-source-badge" class="badge badge-info mono">Discovering models…</span>
-          </h2>
-          <p class="panel-description">Choose a fallback reference and a standby model. When the primary is exhausted on an account, in-flight requests can be retried on the secondary model before rotating to the next account.</p>
-        </div>
-        <div class="header-actions">
-          <button id="btn-refresh-models" class="btn btn-secondary btn-icon" title="Fetch live models from Antigravity" aria-label="Refresh Models">
-            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" id="refresh-models-icon" width="14" height="14">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span class="btn-text-desktop">Fetch Models</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="fallback-config-card">
-        <!-- Toggle secondary fallback -->
-        <div class="config-row config-toggle-row">
-          <div class="config-label-group">
-            <label for="fallback-enabled-toggle" class="config-label">Intra-Account Secondary Fallback</label>
-            <p class="config-subtext">When primary quota exhausts, try secondary model on the SAME account before switching to next account.</p>
-          </div>
-          <div class="switch-control">
-            <input type="checkbox" id="fallback-enabled-toggle" class="toggle-checkbox" role="switch" aria-checked="false">
-            <label for="fallback-enabled-toggle" class="toggle-track" aria-hidden="true"></label>
-            <span id="fallback-toggle-status" class="toggle-label-text">Disabled</span>
-          </div>
-        </div>
-
-        <!-- Model Selectors Grid -->
-        <div class="config-selectors-grid">
-          <!-- Primary Model -->
-          <div class="config-field">
-            <label for="select-model-primary" class="field-label">
-              Primary Model
-              <span class="field-badge badge-primary">Reference</span>
-            </label>
-            <div class="select-wrapper">
-              <select id="select-model-primary" class="form-select" aria-describedby="hint-model-primary">
-                <option value="">Loading models…</option>
-              </select>
-            </div>
-            <input id="custom-model-primary" class="form-input mono" type="text" hidden spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Custom model ID" aria-label="Custom primary model ID">
-            <p class="field-hint" id="hint-model-primary">Fallback reference. It is not forced onto incoming requests; the model a request asks for is still used first.</p>
-          </div>
-
-          <!-- Secondary Model -->
-          <div class="config-field">
-            <label for="select-model-secondary" class="field-label">
-              Secondary Model (Fallback)
-              <span class="field-badge badge-neutral">Standby</span>
-            </label>
-            <div class="select-wrapper">
-              <select id="select-model-secondary" class="form-select" aria-describedby="hint-model-secondary">
-                <option value="">Loading models…</option>
-              </select>
-            </div>
-            <input id="custom-model-secondary" class="form-input mono" type="text" hidden spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Custom model ID" aria-label="Custom secondary model ID">
-            <p class="field-hint" id="hint-model-secondary">Standby used when the requested model is exhausted on the active account. Any model different from the primary is allowed, including the same family.</p>
-          </div>
-        </div>
-
-        <div class="model-notice" id="models-notice" role="note">
-          <span class="model-notice-dot" aria-hidden="true"></span>
-          <div id="models-notice-text"><strong>Availability depends on Google and your account.</strong> Listed models, including preview entries such as Argon or Helium, are not guaranteed to be enabled for every account.</div>
-        </div>
-
-        <!-- Action Bar -->
-        <div class="config-actions-bar">
-          <div class="config-status-msg" id="config-status-msg" aria-live="polite"><span id="model-dirty-msg" class="model-dirty"></span></div>
-          <button id="btn-save-config" class="btn btn-primary" title="Save Fallback Settings">
-            Save Settings
-          </button>
-        </div>
       </div>
     </section>
 

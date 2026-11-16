@@ -261,15 +261,10 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 		}
 
 		if err := p.pollAccount(ctx, acc, now); err != nil {
-			errStr := err.Error()
-			if !strings.Contains(errStr, "403") && !strings.Contains(errStr, "SUBSCRIPTION_REQUIRED") {
-				p.emitEvent(&domain.ProxyEvent{
-					Type:      domain.EventTypeError,
-					AccountID: acc.ID,
-					Message:   fmt.Sprintf("Quota poll error for account %s: %v", acc.Email, err),
-					Timestamp: now,
-				})
-			}
+			p.emitEvent(&domain.ProxyEvent{
+				Type: domain.EventTypeError, AccountID: acc.ID,
+				Message: fmt.Sprintf("Quota poll error for account %s: %v", acc.Email, err), Timestamp: now,
+			})
 		}
 	}
 
@@ -292,6 +287,9 @@ func (p *Poller) PollAccount(ctx context.Context, accountID string) ([]*domain.Q
 }
 
 func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.Time) error {
+	if acc.Status == domain.AccountStatusDisabled {
+		return nil
+	}
 	// 1. Check token expiry and refresh if needed
 	if acc.IsTokenExpired(p.cfg.TokenExpiryMargin) {
 		if p.tokenRefresher != nil && acc.RefreshToken != "" {
@@ -322,7 +320,15 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 
 	// 2. Fetch quota summary
 	var buckets []*domain.QuotaBucket
-	if acc.IsActive && p.cfg.BaseURL == DefaultBaseURL {
+	quotaUnavailable := false
+	if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+		var checkErr error
+		quotaUnavailable, checkErr = repo.IsQuotaUnavailable(ctx, acc.ID)
+		if checkErr != nil {
+			return checkErr
+		}
+	}
+	if !quotaUnavailable && acc.IsActive && p.cfg.BaseURL == DefaultBaseURL {
 		if lsBuckets, lsErr := QueryLocalLanguageServer(ctx, acc.ID); lsErr == nil && len(lsBuckets) > 0 {
 			buckets = lsBuckets
 		}
@@ -337,16 +343,36 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 	}
 
 	// 3. Upsert buckets to SQLite
+	if err := p.quotaRepo.DeleteByAccountID(ctx, acc.ID); err != nil {
+		return err
+	}
 	if len(buckets) > 0 {
-		_ = p.quotaRepo.DeleteByAccountID(ctx, acc.ID)
 		if err := p.quotaRepo.UpsertBuckets(ctx, buckets); err != nil {
 			return fmt.Errorf("failed to upsert quota buckets: %w", err)
 		}
 	}
 
+	if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+		if err := repo.ClearQuotaUnavailableBefore(ctx, acc.ID, now); err != nil {
+			return err
+		}
+	}
+	if cooldowns, ok := p.quotaRepo.(domain.FamilyCooldownRepository); ok {
+		for _, family := range []domain.QuotaFamily{domain.QuotaFamilyArgon, domain.QuotaFamilyGemini, domain.QuotaFamilyClaudeGPT} {
+			if known, available := domain.FamilyQuota(buckets, family, now); known && available {
+				if err := cooldowns.ClearFamilyCooldownBefore(ctx, acc.ID, family, now); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	// 4. Prong 2: Auto-restore check from fresh quota buckets
 	if acc.Status == domain.AccountStatusExhausted && len(buckets) > 0 {
-		if p.isAccountQuotaRestored(buckets, now) {
+		current, statusErr := p.accountRepo.GetByID(ctx, acc.ID)
+		if statusErr != nil {
+			return statusErr
+		}
+		if current.Status == domain.AccountStatusExhausted && p.isAccountQuotaRestored(buckets, now) {
 			if err := p.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusActive); err != nil {
 				return fmt.Errorf("failed to restore account status: %w", err)
 			}
@@ -404,6 +430,14 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 				resp2, err2 := p.client.Do(retryReq)
 				if err2 == nil {
 					defer resp2.Body.Close()
+					if resp2.StatusCode == http.StatusForbidden {
+						if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+							if err := repo.SetQuotaUnavailable(ctx, acc.ID); err != nil {
+								return nil, err
+							}
+						}
+						return nil, fmt.Errorf("quota unavailable (403)")
+					}
 					if resp2.StatusCode == http.StatusOK {
 						return p.parseQuotaResponse(acc.ID, resp2.Body)
 					}
@@ -420,15 +454,16 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		_ = p.accountRepo.UpdateStatus(ctx, acc.ID, domain.AccountStatusExhausted)
-		return nil, fmt.Errorf("quota check received 429 RESOURCE_EXHAUSTED")
+		return nil, fmt.Errorf("quota check received 429 RESOURCE_EXHAUSTED; preserving previous quota snapshot")
 	}
 
 	if resp.StatusCode == http.StatusForbidden {
-		// Consumer / Standard Google account (SUBSCRIPTION_REQUIRED):
-		// Consumer accounts do not have an enterprise quota API endpoint.
-		// Maintain tracking buckets based on active/exhausted state.
-		return p.generateConsumerQuotaBuckets(ctx, acc), nil
+		if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+			if err := repo.SetQuotaUnavailable(ctx, acc.ID); err != nil {
+				return nil, fmt.Errorf("persist quota unavailability: %w", err)
+			}
+		}
+		return nil, fmt.Errorf("quota endpoint unavailable (HTTP 403); account blocked until a later successful quota poll")
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -437,102 +472,6 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 	}
 
 	return p.parseQuotaResponse(acc.ID, resp.Body)
-}
-
-func (p *Poller) generateConsumerQuotaBuckets(ctx context.Context, acc *domain.Account) []*domain.QuotaBucket {
-	now := time.Now().UTC()
-	var dailyResetTime time.Time
-	var weeklyResetTime time.Time
-
-	dailyFraction := 1.0
-	weeklyFraction := 1.0
-
-	// Calculate default weekly reset (next Sunday 00:00 UTC)
-	daysUntilSunday := (7 - int(now.Weekday())) % 7
-	if daysUntilSunday == 0 {
-		daysUntilSunday = 7
-	}
-	weeklyResetTime = time.Date(now.Year(), now.Month(), now.Day()+daysUntilSunday, 0, 0, 0, 0, time.UTC)
-	dailyResetTime = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
-
-	if acc.Status == domain.AccountStatusExhausted {
-		// A 429 is a model cooldown / 5-hour burst exhaustion
-		dailyFraction = 0.0
-		existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
-		for _, b := range existing {
-			if !b.ResetTime.IsZero() && b.ResetTime.After(now) {
-				wLower := strings.ToLower(string(b.Window))
-				idLower := strings.ToLower(b.BucketID)
-				if strings.Contains(wLower, "weekly") {
-					weeklyResetTime = b.ResetTime
-					if b.RemainingFraction > 0 {
-						weeklyFraction = b.RemainingFraction
-					}
-				} else if strings.Contains(wLower, "5h") || strings.Contains(idLower, "5h") {
-					if b.ResetTime.Before(now.Add(5 * time.Hour)) {
-						dailyResetTime = b.ResetTime
-					}
-				}
-			}
-		}
-		if dailyResetTime.IsZero() || dailyResetTime.Before(now) || dailyResetTime.After(now.Add(5*time.Hour)) {
-			dailyResetTime = now.Add(4 * time.Hour)
-		}
-		if weeklyFraction <= 0.0 {
-			weeklyFraction = 0.69 // Keep weekly quota available
-		}
-	} else {
-		// Active accounts have no active cooldown
-		dailyResetTime = time.Time{}
-		existing, _ := p.quotaRepo.GetByAccountID(ctx, acc.ID)
-		for _, b := range existing {
-			if strings.Contains(strings.ToLower(string(b.Window)), "weekly") && b.ResetTime.After(now) {
-				weeklyResetTime = b.ResetTime
-			}
-		}
-	}
-
-	claude5h := &domain.QuotaBucket{
-		BucketID:          acc.ID + "-3p-5h",
-		AccountID:         acc.ID,
-		DisplayName:       "Claude and GPT models (5h)",
-		Window:            domain.QuotaWindow("5h"),
-		RemainingFraction: dailyFraction,
-		ResetTime:         dailyResetTime,
-		UpdatedAt:         now,
-	}
-
-	claudeWeekly := &domain.QuotaBucket{
-		BucketID:          acc.ID + "-3p-weekly",
-		AccountID:         acc.ID,
-		DisplayName:       "Claude and GPT models (weekly)",
-		Window:            domain.QuotaWindow("weekly"),
-		RemainingFraction: weeklyFraction,
-		ResetTime:         weeklyResetTime,
-		UpdatedAt:         now,
-	}
-
-	gemini5h := &domain.QuotaBucket{
-		BucketID:          acc.ID + "-gemini-5h",
-		AccountID:         acc.ID,
-		DisplayName:       "Gemini Models (5h)",
-		Window:            domain.QuotaWindow("5h"),
-		RemainingFraction: 1.0,
-		ResetTime:         dailyResetTime,
-		UpdatedAt:         now,
-	}
-
-	geminiWeekly := &domain.QuotaBucket{
-		BucketID:          acc.ID + "-gemini-weekly",
-		AccountID:         acc.ID,
-		DisplayName:       "Gemini Models (weekly)",
-		Window:            domain.QuotaWindow("weekly"),
-		RemainingFraction: 1.0,
-		ResetTime:         weeklyResetTime,
-		UpdatedAt:         now,
-	}
-
-	return []*domain.QuotaBucket{claude5h, claudeWeekly, gemini5h, geminiWeekly}
 }
 
 func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*domain.QuotaBucket, error) {
@@ -550,6 +489,13 @@ func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+			if err := repo.SetQuotaUnavailable(ctx, acc.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("legacy quota request returned HTTP %d", resp.StatusCode)
 	}
@@ -596,7 +542,9 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 	if len(payload.Groups) > 0 {
 		for _, g := range payload.Groups {
 			groupName := g.DisplayName
-			if strings.Contains(strings.ToLower(groupName), "claude") {
+			if strings.Contains(strings.ToLower(groupName), "argon") {
+				groupName = "Gemini 4 Argon"
+			} else if strings.Contains(strings.ToLower(groupName), "claude") {
 				groupName = "Claude and GPT models"
 			} else if strings.Contains(strings.ToLower(groupName), "gemini") {
 				groupName = "Gemini Models"
@@ -616,6 +564,14 @@ func (p *Poller) parseQuotaResponse(accountID string, r io.Reader) ([]*domain.Qu
 				}
 
 				displayName := fmt.Sprintf("%s (%s)", groupName, b.Window)
+				bucketName := b.DisplayName
+				if bucketName == "" {
+					bucketName = b.DisplayNameAlt
+				}
+				// Retain an explicitly reported independent pool even inside a generic group.
+				if strings.Contains(strings.ToLower(bucketName), "argon") {
+					displayName = fmt.Sprintf("%s (%s)", bucketName, b.Window)
+				}
 
 				fraction := b.RemainingFraction
 				if fraction == 0 && b.RemainingFracAlt > 0 {
@@ -778,6 +734,16 @@ func (p *Poller) restoreExhaustedAccountsPastReset(ctx context.Context, now time
 	}
 
 	for _, id := range resetIDs {
+		if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+			blocked, err := repo.IsQuotaUnavailable(ctx, id)
+			if err != nil || blocked {
+				continue
+			}
+		}
+		current, err := p.accountRepo.GetByID(ctx, id)
+		if err != nil || current.Status != domain.AccountStatusExhausted {
+			continue
+		}
 		if err := p.accountRepo.UpdateStatus(ctx, id, domain.AccountStatusActive); err != nil {
 			continue
 		}

@@ -91,6 +91,15 @@ CREATE TABLE IF NOT EXISTS proxy_events (
 CREATE INDEX IF NOT EXISTS idx_proxy_events_created_at ON proxy_events(created_at);
 `,
 	},
+	{Version: 2, Description: "family_cooldowns", SQL: `
+ CREATE TABLE IF NOT EXISTS family_cooldowns (
+ account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ family TEXT NOT NULL,
+ reset_time TEXT NOT NULL,
+ observed_at INTEGER NOT NULL,
+ PRIMARY KEY(account_id, family));`},
+	{Version: 3, Description: "quota_endpoint_availability", SQL: `CREATE TABLE quota_unavailable (account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, observed_at INTEGER NOT NULL);`},
+	{Version: 4, Description: "family_active_accounts", SQL: `CREATE TABLE family_active_accounts (family TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE);`},
 }
 
 // Migrate applies all pending schema migrations to the database.

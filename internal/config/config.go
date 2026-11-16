@@ -13,29 +13,23 @@ import (
 )
 
 const (
-	DefaultPort                     = 8080
-	DefaultUpstreamURL              = "https://daily-cloudcode-pa.googleapis.com"
-	DefaultInterval                 = "5m"
-	ConfigFileName                  = "config.json"
-	DefaultDBFileName               = "accounts.db"
-	DefaultModelPrimary             = "gemini-3.8-flash-high"
-	DefaultModelSecondary           = "claude-sonnet-5-5"
-	DefaultFallbackSecondaryEnabled = false
+	DefaultPort        = 8080
+	DefaultUpstreamURL = "https://daily-cloudcode-pa.googleapis.com"
+	DefaultInterval    = "5m"
+	ConfigFileName     = "config.json"
+	DefaultDBFileName  = "accounts.db"
 )
 
 // Config holds persistent user configuration.
 type Config struct {
-	Port                     int    `json:"port"`
-	DBPath                   string `json:"db_path"`
-	AntigravityBin           string `json:"antigravity_bin"`
-	UpstreamURL              string `json:"upstream_url"`
-	QuotaInterval            string `json:"quota_interval"`
-	OpenBrowser              bool   `json:"open_browser"`
-	ModelPrimary             string `json:"model_primary"`
-	ModelSecondary           string `json:"model_secondary"`
-	FallbackSecondaryEnabled bool   `json:"fallback_secondary_enabled"`
-	ClientID                 string `json:"client_id,omitempty"`
-	ClientSecret             string `json:"client_secret,omitempty"`
+	Port           int    `json:"port"`
+	DBPath         string `json:"db_path"`
+	AntigravityBin string `json:"antigravity_bin"`
+	UpstreamURL    string `json:"upstream_url"`
+	QuotaInterval  string `json:"quota_interval"`
+	OpenBrowser    bool   `json:"open_browser"`
+	ClientID       string `json:"client_id,omitempty"`
+	ClientSecret   string `json:"client_secret,omitempty"`
 }
 
 // ConfigDir returns the default configuration directory (~/.config/antigravity-account-switcher).
@@ -66,15 +60,12 @@ func DefaultDBPath() string {
 // DefaultConfig returns an initialized Config struct with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Port:                     DefaultPort,
-		DBPath:                   DefaultDBPath(),
-		AntigravityBin:           "",
-		UpstreamURL:              DefaultUpstreamURL,
-		QuotaInterval:            DefaultInterval,
-		OpenBrowser:              false,
-		ModelPrimary:             DefaultModelPrimary,
-		ModelSecondary:           DefaultModelSecondary,
-		FallbackSecondaryEnabled: DefaultFallbackSecondaryEnabled,
+		Port:           DefaultPort,
+		DBPath:         DefaultDBPath(),
+		AntigravityBin: "",
+		UpstreamURL:    DefaultUpstreamURL,
+		QuotaInterval:  DefaultInterval,
+		OpenBrowser:    false,
 	}
 }
 
@@ -95,12 +86,6 @@ func LoadDiskConfig() (*Config, error) {
 	}
 
 	// Defensive defaults if unmarshaled JSON contained explicit empty strings
-	if cfg.ModelPrimary == "" {
-		cfg.ModelPrimary = DefaultModelPrimary
-	}
-	if cfg.ModelSecondary == "" {
-		cfg.ModelSecondary = DefaultModelSecondary
-	}
 
 	return cfg, nil
 }
@@ -128,21 +113,7 @@ func Load() (*Config, error) {
 	if envUpstream := os.Getenv("ANTIGRAVITY_UPSTREAM_URL"); envUpstream != "" {
 		cfg.UpstreamURL = envUpstream
 	}
-	if envPrimary := os.Getenv("ANTIGRAVITY_MODEL_PRIMARY"); envPrimary != "" {
-		if trimmed := strings.TrimSpace(envPrimary); trimmed != "" {
-			cfg.ModelPrimary = trimmed
-		}
-	}
-	if envSecondary := os.Getenv("ANTIGRAVITY_MODEL_SECONDARY"); envSecondary != "" {
-		if trimmed := strings.TrimSpace(envSecondary); trimmed != "" {
-			cfg.ModelSecondary = trimmed
-		}
-	}
-	if envFallback := os.Getenv("ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED"); envFallback != "" {
-		if b, err := ParseBool(envFallback); err == nil {
-			cfg.FallbackSecondaryEnabled = b
-		}
-	}
+
 	if envClientID := os.Getenv("ANTIGRAVITY_CLIENT_ID"); envClientID != "" {
 		cfg.ClientID = strings.TrimSpace(envClientID)
 	}
@@ -189,7 +160,7 @@ func ParseBool(val string) (bool, error) {
 	}
 }
 
-// Validate verifies configuration boundaries, network URLs, and model fallback invariants.
+// Validate verifies configuration boundaries and network URLs.
 func (c *Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d: must be between 1 and 65535", c.Port)
@@ -208,19 +179,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("invalid quota_interval %q: %w", c.QuotaInterval, err)
 		}
 	}
-	if c.FallbackSecondaryEnabled {
-		primary := strings.TrimSpace(c.ModelPrimary)
-		secondary := strings.TrimSpace(c.ModelSecondary)
-		if primary == "" {
-			return errors.New("model_primary cannot be empty when fallback_secondary_enabled is true")
-		}
-		if secondary == "" {
-			return errors.New("model_secondary cannot be empty when fallback_secondary_enabled is true")
-		}
-		if strings.EqualFold(primary, secondary) {
-			return fmt.Errorf("model_primary and model_secondary cannot be identical (%q)", c.ModelPrimary)
-		}
-	}
+
 	return nil
 }
 

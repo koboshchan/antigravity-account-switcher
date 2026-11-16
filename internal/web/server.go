@@ -25,15 +25,14 @@ var embeddedDistFS embed.FS
 
 // ServerConfig holds configuration options for Server.
 type ServerConfig struct {
-	Port                 int
-	BindAddr             string
-	Version              string
-	ProxyHandler         http.Handler
-	Poller               QuotaPoller
-	AppConfig            *config.Config
-	FallbackConfigSetter FallbackConfigSetter
-	ReadTimeout          time.Duration
-	WriteTimeout         time.Duration
+	Port         int
+	BindAddr     string
+	Version      string
+	ProxyHandler http.Handler
+	Poller       QuotaPoller
+	AppConfig    *config.Config
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 // Option configures ServerConfig.
@@ -44,7 +43,7 @@ func WithPort(p int) Option {
 	return func(c *ServerConfig) { c.Port = p }
 }
 
-// WithBindAddr sets the IP/host to bind to (e.g. 127.0.0.1 or 0.0.0.0).
+// WithBindAddr is retained for compatibility; NewServer always enforces IPv4 loopback.
 func WithBindAddr(addr string) Option {
 	return func(c *ServerConfig) { c.BindAddr = addr }
 }
@@ -79,12 +78,6 @@ func WithConfig(cfg *config.Config) Option {
 	return func(c *ServerConfig) { c.AppConfig = cfg }
 }
 
-// WithFallbackConfigSetter sets the dynamic fallback setter for live proxy updates.
-func WithFallbackConfigSetter(setter FallbackConfigSetter) Option {
-	return func(c *ServerConfig) { c.FallbackConfigSetter = setter }
-}
-
-// Server serves both the Web UI/REST API dashboard and the local reverse proxy.
 type Server struct {
 	cfg          ServerConfig
 	api          *APIHandler
@@ -118,6 +111,7 @@ func NewServer(
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	cfg.BindAddr = "127.0.0.1"
 
 	sub, err := fs.Sub(embeddedDistFS, "dist")
 	if err != nil {
@@ -139,9 +133,6 @@ func NewServer(
 	}
 	if cfg.AppConfig != nil {
 		api.SetConfig(cfg.AppConfig)
-	}
-	if cfg.FallbackConfigSetter != nil {
-		api.SetFallbackConfigSetter(cfg.FallbackConfigSetter)
 	}
 
 	return &Server{
@@ -166,7 +157,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/api/config" {
-		s.api.HandleConfig(w, r)
+		http.NotFound(w, r)
 		return
 	}
 	if path == "/api/models" {
@@ -183,6 +174,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/events" {
 		s.api.HandleEvents(w, r)
+		return
+	}
+	if path == "/oauth/submit-callback" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		s.api.HandleOAuthSubmit(w, r)
 		return
 	}
 	if path == "/oauth/start" || path == "/api/oauth/start" {

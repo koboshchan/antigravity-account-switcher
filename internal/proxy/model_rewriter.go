@@ -37,11 +37,14 @@ const (
 	CategoryClaudeGPT
 	// CategoryGemini covers Google Gemini and Gemma first-party models.
 	CategoryGemini
+	CategoryArgon
 )
 
 // String returns a canonical string representation of the ModelCategory.
 func (c ModelCategory) String() string {
 	switch c {
+	case CategoryArgon:
+		return "argon"
 	case CategoryClaudeGPT:
 		return "claude_gpt"
 	case CategoryGemini:
@@ -98,6 +101,10 @@ func CategorizeModel(model string) ModelCategory {
 		lower = strings.ToLower(m)
 	}
 
+	if lower == "argon" || strings.HasPrefix(lower, "argon-") || strings.Contains(lower, "gemini-4-argon") {
+		return CategoryArgon
+	}
+
 	// 1. Claude & GPT Family Check (evaluated first to prevent "pro" collision)
 	if strings.Contains(lower, "claude") ||
 		strings.Contains(lower, "gpt") ||
@@ -115,7 +122,8 @@ func CategorizeModel(model string) ModelCategory {
 	}
 
 	// 2. Gemini Family Check
-	if strings.Contains(lower, "gemini") ||
+	if lower == "hydrogen" || lower == "helium" ||
+		strings.Contains(lower, "gemini") ||
 		strings.Contains(lower, "gemma") ||
 		strings.Contains(lower, "flash") ||
 		strings.Contains(lower, "pro") ||
@@ -496,7 +504,12 @@ func MatchesBucketCategory(cat ModelCategory, displayName, bucketID string) bool
 	name := strings.ToLower(displayName)
 	id := strings.ToLower(bucketID)
 
+	if strings.Contains(name+" "+id, "argon") {
+		return cat == CategoryArgon
+	}
 	switch cat {
+	case CategoryArgon:
+		return false
 	case CategoryClaudeGPT:
 		return strings.Contains(name, "claude") ||
 			strings.Contains(name, "gpt") ||

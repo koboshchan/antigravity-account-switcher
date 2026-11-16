@@ -291,6 +291,7 @@ func TestChallenger2_StateTamperingAndExpiration(t *testing.T) {
 			oauth.WithTokenURL(server.URL+"/token"),
 			oauth.WithUserInfoURL(server.URL+"/oauth2/v3/userinfo"),
 			oauth.WithStateTTL(50*time.Millisecond),
+			oauth.WithFlowTimeout(200*time.Millisecond),
 		)
 
 		opener := func(authURL string) error {
@@ -313,7 +314,7 @@ func TestChallenger2_StateTamperingAndExpiration(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error on expired state flow, got nil")
 		}
-		if !strings.Contains(err.Error(), "expired") && !strings.Contains(err.Error(), "invalid") {
+		if !strings.Contains(err.Error(), "expired") && !strings.Contains(err.Error(), "invalid") && !strings.Contains(err.Error(), "timed out") {
 			t.Errorf("unexpected error on expired state: %v", err)
 		}
 	})

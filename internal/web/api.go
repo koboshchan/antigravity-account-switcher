@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,24 +21,24 @@ import (
 )
 
 // FallbackConfigSetter defines an interface for dynamically updating model fallback settings at runtime.
-type FallbackConfigSetter interface {
-	SetFallbackConfig(primary, secondary string, enabled bool)
+
+type QuotaPoller interface {
+	PollOnce(ctx context.Context) error
 }
 
 // APIHandler implements the REST endpoints and SSE real-time streaming for the switcher.
 type APIHandler struct {
-	accountRepo          domain.AccountRepository
-	quotaRepo            domain.QuotaRepository
-	metricsService       domain.MetricsService
-	broadcaster          domain.EventBroadcaster
-	eventRepo            domain.EventRepository
-	oauthEngine          oauth.OAuthEngine
-	poller               QuotaPoller
-	startTime            time.Time
-	version              string
-	cfgMu                sync.RWMutex
-	appConfig            *config.Config
-	fallbackConfigSetter FallbackConfigSetter
+	accountRepo    domain.AccountRepository
+	quotaRepo      domain.QuotaRepository
+	metricsService domain.MetricsService
+	broadcaster    domain.EventBroadcaster
+	eventRepo      domain.EventRepository
+	oauthEngine    oauth.OAuthEngine
+	poller         QuotaPoller
+	startTime      time.Time
+	version        string
+	cfgMu          sync.RWMutex
+	appConfig      *config.Config
 }
 
 // SetConfig sets the configuration pointer for APIHandler.
@@ -48,16 +49,6 @@ func (a *APIHandler) SetConfig(c *config.Config) {
 }
 
 // SetFallbackConfigSetter sets the dynamic fallback setter for live proxy updates.
-func (a *APIHandler) SetFallbackConfigSetter(s FallbackConfigSetter) {
-	a.cfgMu.Lock()
-	defer a.cfgMu.Unlock()
-	a.fallbackConfigSetter = s
-}
-
-// QuotaPoller defines interface for triggering quota polling passes.
-type QuotaPoller interface {
-	PollOnce(ctx context.Context) error
-}
 
 // SetPoller assigns the quota poller.
 func (a *APIHandler) SetPoller(p QuotaPoller) {
@@ -105,12 +96,13 @@ func NewAPIHandler(
 
 // StatusResponse represents server health and active account info.
 type StatusResponse struct {
-	Status        string          `json:"status"`
-	Version       string          `json:"version"`
-	UptimeSeconds int64           `json:"uptime_seconds"`
-	ActiveAccount *domain.Account `json:"active_account,omitempty"`
-	TotalAccounts int             `json:"total_accounts"`
-	Timestamp     time.Time       `json:"timestamp"`
+	ActiveFamilies map[domain.QuotaFamily]*domain.Account `json:"active_families"`
+	Status         string                                 `json:"status"`
+	Version        string                                 `json:"version"`
+	UptimeSeconds  int64                                  `json:"uptime_seconds"`
+	ActiveAccount  *domain.Account                        `json:"active_account,omitempty"`
+	TotalAccounts  int                                    `json:"total_accounts"`
+	Timestamp      time.Time                              `json:"timestamp"`
 }
 
 // HandleStatus serves GET /api/status.
@@ -131,13 +123,27 @@ func (a *APIHandler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	familyActives := make(map[domain.QuotaFamily]*domain.Account)
+	if repo, ok := a.quotaRepo.(domain.FamilyActiveRepository); ok && a.accountRepo != nil {
+		for _, family := range []domain.QuotaFamily{domain.QuotaFamilyClaudeGPT, domain.QuotaFamilyGemini, domain.QuotaFamilyArgon} {
+			id, err := repo.GetFamilyActive(ctx, family)
+			if err != nil || id == "" {
+				continue
+			}
+			acc, err := a.accountRepo.GetByID(ctx, id)
+			if err == nil && acc != nil && !a.quotaUnavailable(ctx, id) && acc.Status != domain.AccountStatusDisabled && acc.Status != domain.AccountStatusError {
+				familyActives[family] = acc
+			}
+		}
+	}
 	resp := StatusResponse{
-		Status:        "ok",
-		Version:       a.version,
-		UptimeSeconds: int64(time.Since(a.startTime).Seconds()),
-		ActiveAccount: active,
-		TotalAccounts: total,
-		Timestamp:     time.Now().UTC(),
+		ActiveFamilies: familyActives,
+		Status:         "ok",
+		Version:        a.version,
+		UptimeSeconds:  int64(time.Since(a.startTime).Seconds()),
+		ActiveAccount:  active,
+		TotalAccounts:  total,
+		Timestamp:      time.Now().UTC(),
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -146,7 +152,9 @@ func (a *APIHandler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 // AccountWithBuckets encapsulates an Account and its associated quota buckets.
 type AccountWithBuckets struct {
 	*domain.Account
-	Buckets []*domain.QuotaBucket `json:"buckets"`
+	Buckets          []*domain.QuotaBucket                  `json:"buckets"`
+	Families         map[domain.QuotaFamily]FamilyQuotaView `json:"families"`
+	QuotaUnavailable bool                                   `json:"quota_unavailable"`
 }
 
 // HandleAccounts serves GET /api/accounts and DELETE /api/accounts/{id}.
@@ -216,12 +224,18 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 		if allBuckets != nil {
 			b = allBuckets[acc.ID]
 		}
+		unavailable := a.quotaUnavailable(ctx, acc.ID)
+		if unavailable {
+			b = nil
+		}
 		if b == nil {
 			b = []*domain.QuotaBucket{}
 		}
 		result = append(result, &AccountWithBuckets{
-			Account: acc,
-			Buckets: b,
+			Account:          acc,
+			Buckets:          b,
+			Families:         a.familyQuotaViews(ctx, acc, b, unavailable),
+			QuotaUnavailable: unavailable,
 		})
 	}
 
@@ -249,13 +263,19 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 	if a.quotaRepo != nil {
 		buckets, _ = a.quotaRepo.GetByAccountID(ctx, id)
 	}
+	unavailable := a.quotaUnavailable(ctx, acc.ID)
+	if unavailable {
+		buckets = nil
+	}
 	if buckets == nil {
 		buckets = []*domain.QuotaBucket{}
 	}
 
 	writeJSON(w, http.StatusOK, &AccountWithBuckets{
-		Account: acc,
-		Buckets: buckets,
+		Account:          acc,
+		Buckets:          buckets,
+		Families:         a.familyQuotaViews(ctx, acc, buckets, unavailable),
+		QuotaUnavailable: unavailable,
 	})
 }
 
@@ -510,7 +530,7 @@ func (a *APIHandler) HandleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			if a.broadcaster != nil {
 				a.broadcaster.Broadcast(&domain.ProxyEvent{
 					Type:      domain.EventType("oauth_started"),
-					Message:   fmt.Sprintf("OAuth authorization flow initiated: %s", authURL),
+					Message:   "OAuth authorization flow initiated",
 					Timestamp: time.Now().UTC(),
 				})
 			}
@@ -523,7 +543,7 @@ func (a *APIHandler) HandleOAuthStart(w http.ResponseWriter, r *http.Request) {
 			if a.broadcaster != nil {
 				a.broadcaster.Broadcast(&domain.ProxyEvent{
 					Type:      domain.EventTypeError,
-					Message:   fmt.Sprintf("OAuth flow failed: %v", err),
+					Message:   "OAuth flow failed; start sign-in again",
 					Timestamp: time.Now().UTC(),
 				})
 			}
@@ -582,158 +602,8 @@ func writeErrorJSON(w http.ResponseWriter, statusCode int, message string, err e
 }
 
 // ConfigResponse represents the response payload for GET /api/config.
-type ConfigResponse struct {
-	ModelPrimary             string `json:"model_primary"`
-	ModelSecondary           string `json:"model_secondary"`
-	FallbackSecondaryEnabled bool   `json:"fallback_secondary_enabled"`
-}
 
 // ConfigUpdateRequest represents the payload for POST /api/config.
-type ConfigUpdateRequest struct {
-	ModelPrimary             *string `json:"model_primary,omitempty"`
-	ModelSecondary           *string `json:"model_secondary,omitempty"`
-	FallbackSecondaryEnabled *bool   `json:"fallback_secondary_enabled,omitempty"`
-}
-
-// HandleConfig serves GET and POST /api/config.
-func (a *APIHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		a.getConfig(w, r)
-	case http.MethodPost, http.MethodPut:
-		a.updateConfig(w, r)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (a *APIHandler) getConfig(w http.ResponseWriter, _ *http.Request) {
-	a.cfgMu.RLock()
-	var primary, secondary string
-	var enabled bool
-	if a.appConfig != nil {
-		primary = a.appConfig.ModelPrimary
-		secondary = a.appConfig.ModelSecondary
-		enabled = a.appConfig.FallbackSecondaryEnabled
-	}
-	a.cfgMu.RUnlock()
-
-	if primary == "" {
-		if diskCfg, err := config.Load(); err == nil && diskCfg != nil {
-			primary = diskCfg.ModelPrimary
-			secondary = diskCfg.ModelSecondary
-			enabled = diskCfg.FallbackSecondaryEnabled
-		} else {
-			def := config.DefaultConfig()
-			primary = def.ModelPrimary
-			secondary = def.ModelSecondary
-			enabled = def.FallbackSecondaryEnabled
-		}
-	}
-
-	writeJSON(w, http.StatusOK, ConfigResponse{
-		ModelPrimary:             primary,
-		ModelSecondary:           secondary,
-		FallbackSecondaryEnabled: enabled,
-	})
-}
-
-func (a *APIHandler) updateConfig(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 65536)
-	var req ConfigUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, "invalid request body", err)
-		return
-	}
-
-	a.cfgMu.Lock()
-	var currentCfg *config.Config
-	if a.appConfig != nil {
-		currentCfg = a.appConfig
-	} else {
-		loaded, err := config.Load()
-		if err != nil || loaded == nil {
-			loaded = config.DefaultConfig()
-		}
-		currentCfg = loaded
-		a.appConfig = loaded
-	}
-
-	if req.ModelPrimary != nil {
-		if trimmed := strings.TrimSpace(*req.ModelPrimary); trimmed != "" {
-			currentCfg.ModelPrimary = trimmed
-		}
-	}
-	if req.ModelSecondary != nil {
-		if trimmed := strings.TrimSpace(*req.ModelSecondary); trimmed != "" {
-			currentCfg.ModelSecondary = trimmed
-		}
-	}
-	if req.FallbackSecondaryEnabled != nil {
-		currentCfg.FallbackSecondaryEnabled = *req.FallbackSecondaryEnabled
-	}
-
-	if err := currentCfg.Validate(); err != nil {
-		a.cfgMu.Unlock()
-		writeErrorJSON(w, http.StatusBadRequest, "invalid configuration", err)
-		return
-	}
-
-	// Preserve existing non-model fields from disk config
-	if diskCfg, err := config.Load(); err == nil && diskCfg != nil {
-		if currentCfg.AntigravityBin == "" && diskCfg.AntigravityBin != "" {
-			currentCfg.AntigravityBin = diskCfg.AntigravityBin
-		}
-		if currentCfg.DBPath == "" && diskCfg.DBPath != "" {
-			currentCfg.DBPath = diskCfg.DBPath
-		}
-		if currentCfg.UpstreamURL == "" && diskCfg.UpstreamURL != "" {
-			currentCfg.UpstreamURL = diskCfg.UpstreamURL
-		}
-		if currentCfg.QuotaInterval == "" && diskCfg.QuotaInterval != "" {
-			currentCfg.QuotaInterval = diskCfg.QuotaInterval
-		}
-	}
-
-	_ = config.Save(currentCfg)
-
-	if a.fallbackConfigSetter != nil {
-		a.fallbackConfigSetter.SetFallbackConfig(
-			currentCfg.ModelPrimary,
-			currentCfg.ModelSecondary,
-			currentCfg.FallbackSecondaryEnabled,
-		)
-	}
-
-	resp := ConfigResponse{
-		ModelPrimary:             currentCfg.ModelPrimary,
-		ModelSecondary:           currentCfg.ModelSecondary,
-		FallbackSecondaryEnabled: currentCfg.FallbackSecondaryEnabled,
-	}
-	broadcaster := a.broadcaster
-	a.cfgMu.Unlock()
-
-	if broadcaster != nil {
-		broadcaster.Broadcast(&domain.ProxyEvent{
-			Type:    domain.EventTypeModelFallback,
-			Message: fmt.Sprintf("Model fallback updated: Primary=%s, Secondary=%s, Enabled=%t", resp.ModelPrimary, resp.ModelSecondary, resp.FallbackSecondaryEnabled),
-			Details: map[string]any{
-				"model_primary":              resp.ModelPrimary,
-				"model_secondary":            resp.ModelSecondary,
-				"fallback_secondary_enabled": resp.FallbackSecondaryEnabled,
-			},
-			Timestamp: time.Now().UTC(),
-		})
-	}
-
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// ModelsResponse models the JSON payload for GET /api/models.
-type ModelsResponse struct {
-	Models []*domain.ModelInfo `json:"models"`
-	Source string              `json:"source"`
-}
 
 // HandleModels serves GET /api/models.
 func (a *APIHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
@@ -756,63 +626,14 @@ func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, s
 	if a.accountRepo != nil {
 		if activeAcc, err := a.accountRepo.GetActive(ctx); err == nil && activeAcc != nil && activeAcc.AccessToken != "" {
 			if ccModels, err := quota.FetchAvailableModelsFromCloudCode(ctx, activeAcc.AccessToken); err == nil && len(ccModels) > 0 {
-				return a.ensureConfiguredModelsPresent(ccModels), "cloud_code_pa"
+				return ccModels, "cloud_code_pa"
 			}
 		}
 	}
 	if lsModels, err := quota.QueryAvailableModels(ctx); err == nil && len(lsModels) > 0 {
-		return a.ensureConfiguredModelsPresent(lsModels), "language_server"
+		return lsModels, "language_server"
 	}
-	return a.ensureConfiguredModelsPresent(quota.DefaultModelCatalog()), "catalog"
-}
-
-func (a *APIHandler) ensureConfiguredModelsPresent(models []*domain.ModelInfo) []*domain.ModelInfo {
-	// Keep experimental suggestions selectable without claiming Google returned them.
-	models = append([]*domain.ModelInfo(nil), models...)
-	seen := make(map[string]bool, len(models))
-	for _, m := range models {
-		if m != nil {
-			seen[m.ID] = true
-		}
-	}
-
-	for _, suggested := range quota.DefaultModelCatalog() {
-		if !seen[suggested.ID] {
-			copy := *suggested
-			copy.DisplayName += " · Suggested (not in live catalog)"
-			copy.Recommended = false
-			models = append(models, &copy)
-			seen[copy.ID] = true
-		}
-	}
-
-	a.cfgMu.RLock()
-	var primary, secondary string
-	if a.appConfig != nil {
-		primary = a.appConfig.ModelPrimary
-		secondary = a.appConfig.ModelSecondary
-	}
-	a.cfgMu.RUnlock()
-
-	if primary != "" && !seen[primary] {
-		models = append(models, &domain.ModelInfo{
-			ID:          primary,
-			DisplayName: primary,
-			Category:    modelCategory(primary),
-			Recommended: true,
-		})
-		seen[primary] = true
-	}
-	if secondary != "" && !seen[secondary] {
-		models = append(models, &domain.ModelInfo{
-			ID:          secondary,
-			DisplayName: secondary,
-			Category:    modelCategory(secondary),
-			Recommended: true,
-		})
-	}
-
-	return models
+	return quota.DefaultModelCatalog(), "catalog"
 }
 
 // modelCategory labels configured IDs without restricting what the proxy accepts.
@@ -825,4 +646,117 @@ func modelCategory(id string) string {
 		return "gemini"
 	}
 	return "unknown"
+}
+
+// FamilyQuotaView distinguishes measured/cached evidence from reactive cooldowns.
+type FamilyQuotaView struct {
+	Active    bool       `json:"active"`
+	Status    string     `json:"status"`
+	Evidence  string     `json:"evidence"`
+	ResetTime *time.Time `json:"reset_time,omitempty"`
+}
+
+func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, buckets []*domain.QuotaBucket, unavailable bool) map[domain.QuotaFamily]FamilyQuotaView {
+	result := make(map[domain.QuotaFamily]FamilyQuotaView)
+	now := time.Now().UTC()
+	for _, family := range []domain.QuotaFamily{domain.QuotaFamilyArgon, domain.QuotaFamilyGemini, domain.QuotaFamilyClaudeGPT} {
+		if unavailable {
+			result[family] = FamilyQuotaView{Status: "unavailable", Evidence: "Quota endpoint unavailable; a successful live quota poll is required"}
+			continue
+		}
+		active := false
+		if repo, ok := a.quotaRepo.(domain.FamilyActiveRepository); ok {
+			id, err := repo.GetFamilyActive(ctx, family)
+			active = err == nil && id == acc.ID
+		}
+		known, available := domain.FamilyQuota(buckets, family, now)
+		view := FamilyQuotaView{Active: active, Status: "unknown", Evidence: "No family-specific quota reported"}
+		var reset time.Time
+		if known {
+			view.Evidence = "Cached quota evidence; live refresh not guaranteed"
+			view.Status = "eligible"
+			if !available {
+				view.Status = "blocked"
+			}
+			for _, b := range buckets {
+				if domain.BucketFamily(b) == family && b.IsExhausted() && !b.HasReset(now) && b.ResetTime.After(reset) {
+					reset = b.ResetTime
+				}
+			}
+		}
+		if repo, ok := a.quotaRepo.(domain.FamilyCooldownRepository); ok {
+			cooldown, err := repo.GetFamilyCooldown(ctx, acc.ID, family)
+			if err != nil {
+				view.Status = "unavailable"
+			} else if cooldown.After(now) {
+				view.Status = "cooldown"
+				if cooldown.After(reset) {
+					reset = cooldown
+				}
+			}
+		}
+		if acc.Status == domain.AccountStatusDisabled || acc.Status == domain.AccountStatusError {
+			view.Status = string(acc.Status)
+		}
+		if acc.Status == domain.AccountStatusExhausted && !known && view.Status == "unknown" {
+			view.Evidence = "Legacy exhaustion; no family-specific quota reported"
+		}
+		if !reset.IsZero() {
+			r := reset
+			view.ResetTime = &r
+		}
+		result[family] = view
+	}
+	return result
+}
+
+func (a *APIHandler) quotaUnavailable(ctx context.Context, accountID string) bool {
+	if repo, ok := a.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
+		unavailable, err := repo.IsQuotaUnavailable(ctx, accountID)
+		return err != nil || unavailable
+	}
+	return false
+}
+
+type ModelsResponse struct {
+	Models []*domain.ModelInfo `json:"models"`
+	Source string              `json:"source"`
+}
+
+// HandleOAuthSubmit accepts a callback URL without making any request to that URL.
+func (a *APIHandler) HandleOAuthSubmit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		writeErrorJSON(w, 415, "JSON submission required", nil)
+		return
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
+			writeErrorJSON(w, 403, "Cross-origin callback submission rejected", nil)
+			return
+		}
+	}
+
+	engine, ok := a.oauthEngine.(interface {
+		SubmitCallbackURL(context.Context, string) (*domain.Account, error)
+	})
+	if !ok {
+		writeErrorJSON(w, http.StatusNotImplemented, "Callback submission unavailable", nil)
+		return
+	}
+	var body struct {
+		URL string `json:"callback_url"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10000)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErrorJSON(w, 400, "Invalid callback submission", nil)
+		return
+	}
+	_, err := engine.SubmitCallbackURL(r.Context(), body.URL)
+	if err != nil {
+		writeErrorJSON(w, 400, "Callback rejected or authorization failed. Check the pending sign-in or start again.", nil)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "connected"})
 }

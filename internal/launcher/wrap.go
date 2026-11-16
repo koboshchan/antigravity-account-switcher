@@ -26,17 +26,14 @@ import (
 
 // Config holds options for the Wrap supervisor.
 type Config struct {
-	Port                     int
-	DBPath                   string
-	TargetURL                string
-	PollInterval             time.Duration
-	OpenBrowser              bool
-	ModelPrimary             string
-	ModelSecondary           string
-	FallbackSecondaryEnabled bool
-	Stdin                    io.Reader
-	Stdout                   io.Writer
-	Stderr                   io.Writer
+	Port         int
+	DBPath       string
+	TargetURL    string
+	PollInterval time.Duration
+	OpenBrowser  bool
+	Stdin        io.Reader
+	Stdout       io.Writer
+	Stderr       io.Writer
 
 	// Injectable dependencies for unit and integration testing
 	DB     *sqlite.DB
@@ -46,15 +43,6 @@ type Config struct {
 
 // Option configures Wrap behavior.
 type Option func(*Config)
-
-// WithModelFallback configures the model fallback primary, secondary, and enabled flag.
-func WithModelFallback(primary, secondary string, enabled bool) Option {
-	return func(c *Config) {
-		c.ModelPrimary = primary
-		c.ModelSecondary = secondary
-		c.FallbackSecondaryEnabled = enabled
-	}
-}
 
 // WithPort sets the switcher listening port (0 allocates a random ephemeral port).
 func WithPort(p int) Option {
@@ -152,7 +140,7 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 	}
 
 	cfg := Config{
-		Port:         0, // Default to ephemeral port for collision-free launch
+		Port:         config.DefaultPort, // Fixed dashboard default
 		PollInterval: 5 * time.Minute,
 		Stdin:        os.Stdin,
 		Stdout:       os.Stdout,
@@ -215,13 +203,6 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 		if cfg.TargetURL != "" {
 			appCfg.UpstreamURL = cfg.TargetURL
 		}
-		if cfg.ModelPrimary != "" {
-			appCfg.ModelPrimary = cfg.ModelPrimary
-		}
-		if cfg.ModelSecondary != "" {
-			appCfg.ModelSecondary = cfg.ModelSecondary
-		}
-		appCfg.FallbackSecondaryEnabled = cfg.FallbackSecondaryEnabled
 
 		broadcaster = proxy.NewBroadcaster(100)
 		failoverEngine = proxy.NewFailoverEngine(
@@ -229,7 +210,6 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			broadcaster,
 			eventRepo,
 			proxy.WithQuotaRepository(quotaRepo),
-			proxy.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
 		)
 		oauthService = oauth.NewOAuthService(accRepo)
 
@@ -295,7 +275,6 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 			web.WithBindAddr("127.0.0.1"),
 			web.WithProxyHandler(proxyHandler),
 			web.WithPoller(poller),
-			web.WithFallbackConfigSetter(failoverEngine),
 			web.WithConfig(appCfg),
 		)
 		if err != nil {
@@ -317,45 +296,10 @@ func Wrap(ctx context.Context, cmdArgs []string, opts ...Option) (int, error) {
 
 	// 3. Start web/proxy server
 	if err := server.Start(); err != nil {
-		if strings.Contains(err.Error(), "address already in use") && cfg.Port > 0 {
-			fmt.Printf("Notice: Port %d is already in use, falling back to ephemeral port...\n", cfg.Port)
-			serverOpts := []web.Option{
-				web.WithPort(0),
-				web.WithBindAddr("127.0.0.1"),
-				web.WithProxyHandler(proxyHandler),
-			}
-			if poller != nil {
-				serverOpts = append(serverOpts, web.WithPoller(poller))
-			}
-			if failoverEngine != nil {
-				serverOpts = append(serverOpts, web.WithFallbackConfigSetter(failoverEngine))
-			}
-			if appCfg != nil {
-				serverOpts = append(serverOpts, web.WithConfig(appCfg))
-			}
-			serverInstance, fallbackErr := web.NewServer(
-				accRepo,
-				quotaRepo,
-				metricsService,
-				broadcaster,
-				eventRepo,
-				oauthService,
-				serverOpts...,
-			)
-			if fallbackErr == nil && serverInstance.Start() == nil {
-				server = serverInstance
-			} else {
-				if dbToClose != nil {
-					_ = dbToClose.Close()
-				}
-				return 1, fmt.Errorf("failed to start switcher server: %w", err)
-			}
-		} else {
-			if dbToClose != nil {
-				_ = dbToClose.Close()
-			}
-			return 1, fmt.Errorf("failed to start switcher server: %w", err)
+		if dbToClose != nil {
+			_ = dbToClose.Close()
 		}
+		return 1, fmt.Errorf("failed to bind dashboard on 127.0.0.1:%d (choose --dashboard-port if occupied): %w", cfg.Port, err)
 	}
 
 	defer func() {

@@ -8,12 +8,6 @@
   let eventSource = null;
   let rawTimelineData = [];
   let rawAccountsData = [];
-  let rawModelsData = [];
-  let currentAppConfig = {
-    model_primary: 'gemini-3.8-flash-high',
-    model_secondary: 'claude-sonnet-5-5',
-    fallback_secondary_enabled: false
-  };
   let allEvents = [];
   let currentLogFilter = 'all';
   let isUserScrolledUp = false;
@@ -38,17 +32,6 @@
   const chartXAxis = document.getElementById('chart-x-axis');
   const gridMaxLabel = document.getElementById('grid-max-label');
   const gridMidLabel = document.getElementById('grid-mid-label');
-
-  // Model Fallback DOM Elements
-  const fallbackToggle = document.getElementById('fallback-enabled-toggle');
-  const fallbackToggleStatus = document.getElementById('fallback-toggle-status');
-  const selectModelPrimary = document.getElementById('select-model-primary');
-  const selectModelSecondary = document.getElementById('select-model-secondary');
-  const btnSaveConfig = document.getElementById('btn-save-config');
-  const btnRefreshModels = document.getElementById('btn-refresh-models');
-  const refreshModelsIcon = document.getElementById('refresh-models-icon');
-  const modelsSourceBadge = document.getElementById('models-source-badge');
-  const configStatusMsg = document.getElementById('config-status-msg');
 
   // =========================================================================
   // Formatting & Utility Helpers
@@ -270,56 +253,13 @@
         versionEl.textContent = data.version.startsWith('v') ? data.version : `v${data.version}`;
       }
 
-      // Active Account Route
-      const activeEmailEl = document.getElementById('active-email');
-      const activeDetailsEl = document.getElementById('active-details');
-      const activeBadge = document.getElementById('active-status-badge');
-      const copyActiveBtn = document.getElementById('btn-copy-active-email');
-
-      if (data.active_account) {
-        const email = data.active_account.email;
-        activeEmailEl.textContent = email;
-        activeEmailEl.setAttribute('data-real-email', email);
-        activeEmailEl.title = isPrivacyMode ? '[Protected in Privacy Mode]' : `${email} (Click to copy)`;
-        activeEmailEl.style.cursor = isPrivacyMode ? 'default' : 'pointer';
-        activeEmailEl.onclick = () => {
-          const toCopy = isPrivacyMode ? '[redacted@email.com]' : email;
-          copyToClipboard(toCopy, isPrivacyMode ? 'Redacted email' : 'Account email');
-        };
-
-        if (copyActiveBtn) {
-          copyActiveBtn.style.display = 'inline-flex';
-          copyActiveBtn.title = isPrivacyMode ? 'Copy redacted email' : 'Copy active email';
-          copyActiveBtn.onclick = () => {
-            const toCopy = isPrivacyMode ? '[redacted@email.com]' : email;
-            copyToClipboard(toCopy, isPrivacyMode ? 'Redacted email' : 'Account email');
-          };
-        }
-
-        let createdDateStr = 'recent';
-        if (data.active_account.created_at) {
-          const d = new Date(data.active_account.created_at);
-          if (!isNaN(d.getTime())) {
-            createdDateStr = d.toLocaleDateString();
-          }
-        }
-        activeDetailsEl.textContent = `ID: ${data.active_account.id.slice(0, 8)}... • Added ${createdDateStr} • HTTP 429 auto-failover armed`;
-
-        const isExhausted = data.active_account.status === 'exhausted';
-        activeBadge.textContent = (data.active_account.status || 'ACTIVE').toUpperCase();
-        activeBadge.className = isExhausted ? 'badge badge-danger' : 'badge badge-success';
-      } else {
-        activeEmailEl.removeAttribute('data-real-email');
-        activeEmailEl.textContent = 'No Active Google Account';
-        activeEmailEl.title = 'No account selected';
-        activeEmailEl.style.cursor = 'default';
-        activeEmailEl.onclick = null;
-        if (copyActiveBtn) copyActiveBtn.style.display = 'none';
-
-        activeDetailsEl.textContent = 'Authenticate an account or select one below to arm proxy';
-        activeBadge.textContent = 'STANDBY';
-        activeBadge.className = 'badge badge-warning';
-      }
+      // Each family routes independently. No global account is presented as its owner.
+      const routes = document.getElementById('family-active-routes');
+      if (routes) routes.innerHTML = [['gemini','Gemini'],['argon','Gemini 4 Argon'],['claude_gpt','Claude & GPT']].map(([key,label]) => {
+        const account = (data.active_families || {})[key];
+        const email = account ? (isPrivacyMode ? '[redacted@email.com]' : account.email) : 'Automatic on next request';
+        return `<div class="text-xs text-secondary">${escapeHtml(label)} · <span${account ? ` data-real-email="${escapeHtml(account.email)}"` : ''}>${escapeHtml(email)}</span></div>`;
+      }).join('');
 
       // Quick Stats
       const accountsCountStat = document.getElementById('accounts-stat-count');
@@ -396,13 +336,13 @@
     card.className = `account-card ${isActive ? 'is-active' : ''}`;
     card.setAttribute('data-account-id', acc.id);
 
-    const buckets = acc.buckets || [];
+    const buckets = acc.quota_unavailable ? [] : (acc.buckets || []);
 
     function findBucket(windowPattern, namePattern) {
       return buckets.find(b => {
         const idOrName = ((b.bucket_id || '') + ' ' + (b.display_name || '')).toLowerCase();
         const windowMatch = (b.window || '').toLowerCase().includes(windowPattern.toLowerCase());
-        const nameMatch = idOrName.includes(namePattern.toLowerCase());
+        const nameMatch = idOrName.includes(namePattern.toLowerCase()) && (namePattern === 'argon' || !idOrName.includes('argon'));
         return windowMatch && nameMatch;
       }) || null;
     }
@@ -411,9 +351,10 @@
     const claudeWeekly = findBucket('weekly', '3p') || findBucket('weekly', 'claude');
     const gemini5h = findBucket('5h', 'gemini');
     const geminiWeekly = findBucket('weekly', 'gemini');
+    const argonBuckets = buckets.filter(b => ((b.bucket_id || '') + ' ' + (b.display_name || '')).toLowerCase().includes('argon'));
 
     // Identify standard buckets to find any custom/other buckets
-    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly].filter(Boolean));
+    const standardBucketSet = new Set([claude5h, claudeWeekly, gemini5h, geminiWeekly, ...argonBuckets].filter(Boolean));
     const extraBuckets = buckets.filter(b => !standardBucketSet.has(b));
 
     function renderQuotaRow(label, bucket) {
@@ -422,7 +363,7 @@
           <div class="quota-row">
             <div class="quota-labels">
               <span class="quota-name">${escapeHtml(label)}</span>
-              <span class="quota-pct text-muted tabular-nums">--%</span>
+              <span class="quota-pct text-muted tabular-nums">Unknown</span>
             </div>
             <div class="quota-bar-track">
               <div class="quota-bar-fill bar-healthy" style="width: 100%; opacity: 0.15;"></div>
@@ -518,6 +459,20 @@
 
         ${extraHtml}
       `;
+    }
+
+    // Keep the existing compact card design; quota families remain independently readable.
+    const families = acc.families || {};
+    const familySummary = [['argon', 'Gemini 4 Argon'], ['gemini', 'Gemini'], ['claude_gpt', 'Claude & GPT']].map(([key, label]) => {
+      const family = families[key] || {status: 'unknown', evidence: 'No family-specific quota reported'};
+      const reset = family.reset_time ? ' · reset ' + new Date(family.reset_time).toLocaleString() : '';
+      return `<div class="text-xs text-secondary" title="${escapeHtml(family.evidence || '')}">${escapeHtml(label)}${family.active ? ' · ACTIVE' : ''} · ${escapeHtml(family.status)}${escapeHtml(reset)}</div>`;
+    }).join('');
+    quotaBodyHtml = `<div class="quota-group"><div class="text-xs text-muted">Family routing · cached evidence, not a live quota guarantee</div>${familySummary}</div>` + quotaBodyHtml;
+    quotaBodyHtml += `<div class="quota-group"><div class="quota-group-header"><span class="quota-group-name">Gemini 4 Argon</span><span class="quota-group-models">Independent quota</span></div>${argonBuckets.length ? argonBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('') : '<div class="text-xs text-muted">Unknown · Google has not reported Argon-specific quota.</div>'}</div>`;
+
+    if (acc.quota_unavailable) {
+      quotaBodyHtml = '<div class="quota-group"><div class="text-danger">Quota unavailable</div><div class="text-xs text-muted">Quota endpoint permission denied. Cached percentages are hidden. A successful live quota poll is required before this account can route requests.</div></div>';
     }
 
     // Status badge formatting
@@ -645,268 +600,6 @@
   }
 
   // =========================================================================
-  // Model Fallback Configuration & Dynamic Discovery
-  // =========================================================================
-
-  const CUSTOM_VALUE = '__custom__';
-  const modelDirty = { primary: false, secondary: false };
-  const customInputs = {
-    primary: document.getElementById('custom-model-primary'),
-    secondary: document.getElementById('custom-model-secondary')
-  };
-  const modelsNoticeText = document.getElementById('models-notice-text');
-
-  function selectFor(kind) { return kind === 'primary' ? selectModelPrimary : selectModelSecondary; }
-
-  function readModelValue(kind) {
-    const sel = selectFor(kind);
-    if (!sel) return '';
-    if (sel.value === CUSTOM_VALUE) return (customInputs[kind].value || '').trim();
-    return sel.value;
-  }
-
-  function updateDirtyMessage() {
-    let modelDirtyMsg = document.getElementById('model-dirty-msg');
-    if (!modelDirtyMsg && configStatusMsg && (modelDirty.primary || modelDirty.secondary)) {
-      configStatusMsg.innerHTML = '<span id="model-dirty-msg" class="model-dirty"></span>';
-      modelDirtyMsg = document.getElementById('model-dirty-msg');
-    }
-    if (!modelDirtyMsg) return;
-    modelDirtyMsg.textContent = (modelDirty.primary || modelDirty.secondary) ? 'Unsaved changes' : '';
-  }
-
-  function syncCustomVisibility(kind) {
-    const sel = selectFor(kind);
-    const input = customInputs[kind];
-    if (!sel || !input) return;
-    input.hidden = sel.value !== CUSTOM_VALUE;
-  }
-
-  async function fetchConfig() {
-    try {
-      const res = await fetch('/api/config');
-      if (!res.ok) return;
-      const data = await res.json();
-      currentAppConfig = data;
-
-      if (fallbackToggle) {
-        fallbackToggle.checked = Boolean(data.fallback_secondary_enabled);
-        updateToggleStatusText(Boolean(data.fallback_secondary_enabled));
-      }
-      // Never overwrite values the user has changed but not saved yet.
-      renderModelSelect('primary');
-      renderModelSelect('secondary');
-    } catch (err) {
-      console.warn('Failed to fetch config:', err);
-    }
-  }
-
-  function updateToggleStatusText(isEnabled) {
-    if (!fallbackToggleStatus) return;
-    if (fallbackToggle) fallbackToggle.setAttribute('aria-checked', String(Boolean(isEnabled)));
-    if (isEnabled) {
-      fallbackToggleStatus.textContent = 'Enabled';
-      fallbackToggleStatus.className = 'toggle-label-text is-enabled';
-    } else {
-      fallbackToggleStatus.textContent = 'Disabled';
-      fallbackToggleStatus.className = 'toggle-label-text';
-    }
-  }
-
-  function setModelsBadge(source) {
-    if (!modelsSourceBadge) return;
-    if (source === 'cloud_code_pa') {
-      modelsSourceBadge.textContent = 'Google (Live)';
-      modelsSourceBadge.className = 'badge badge-success mono';
-      modelsSourceBadge.title = 'Fetched live from Google Cloud Code PA for the active account';
-    } else if (source === 'language_server') {
-      modelsSourceBadge.textContent = 'Antigravity IDE (Live)';
-      modelsSourceBadge.className = 'badge badge-success mono';
-      modelsSourceBadge.title = 'Discovered from the running language_server';
-    } else if (source === 'quota_buckets') {
-      modelsSourceBadge.textContent = 'Quota Buckets';
-      modelsSourceBadge.className = 'badge badge-info mono';
-      modelsSourceBadge.title = 'Derived from account quota buckets';
-    } else {
-      modelsSourceBadge.textContent = 'Fallback catalog (unverified)';
-      modelsSourceBadge.className = 'badge badge-warning mono';
-      modelsSourceBadge.title = 'Could not reach Google or the IDE. This is a built-in list and may be out of date.';
-    }
-    if (modelsNoticeText) {
-      const unverified = !(source === 'cloud_code_pa' || source === 'language_server' || source === 'quota_buckets');
-      modelsNoticeText.innerHTML = '<strong>' + (unverified ? 'Unverified fallback list.' : 'Availability depends on Google and your account.') + '</strong> ' +
-        (unverified
-          ? 'No live catalog was reachable, so these entries may be stale. Preview models such as Argon or Helium are not guaranteed to be enabled for your account.'
-          : 'Listed models, including preview entries such as Argon or Helium, are not guaranteed to be enabled for every account.');
-    }
-  }
-
-  async function fetchModels() {
-    if (refreshModelsIcon) {
-      refreshModelsIcon.style.transition = 'transform 0.5s ease-in-out';
-      refreshModelsIcon.style.transform = 'rotate(360deg)';
-    }
-
-    try {
-      const res = await fetch('/api/models');
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      rawModelsData = Array.isArray(data.models) ? data.models : [];
-      setModelsBadge(data.source);
-      populateModelSelects();
-    } catch (err) {
-      console.warn('Failed to fetch models:', err);
-      if (modelsSourceBadge) {
-        modelsSourceBadge.textContent = 'Models unavailable';
-        modelsSourceBadge.className = 'badge badge-warning mono';
-      }
-      populateModelSelects();
-    } finally {
-      setTimeout(() => {
-        if (refreshModelsIcon) {
-          refreshModelsIcon.style.transition = 'none';
-          refreshModelsIcon.style.transform = 'rotate(0deg)';
-        }
-      }, 500);
-    }
-  }
-
-  function getModelCategory(modelId) {
-    const found = rawModelsData.find(m => m.id === modelId);
-    if (found && found.category) return found.category;
-    const lower = (modelId || '').toLowerCase();
-    if (lower.includes('claude') || lower.includes('gpt') || lower.includes('sonnet') || lower.includes('opus') || lower.includes('haiku') || lower.includes('3p')) {
-      return 'claude_gpt';
-    }
-    return 'gemini';
-  }
-
-  function optionHtml(m, selectedVal) {
-    const sel = m.id === selectedVal ? ' selected' : '';
-    const star = m.recommended ? ' ★' : '';
-    return '<option value="' + escapeHtml(m.id) + '"' + sel + '>' + escapeHtml(m.display_name || m.id) + star + '</option>';
-  }
-
-  // Rebuild one select. Keeps the user's unsaved choice, else the saved config value.
-  function renderModelSelect(kind) {
-    const sel = selectFor(kind);
-    if (!sel) return;
-    const input = customInputs[kind];
-    const configKey = kind === 'primary' ? 'model_primary' : 'model_secondary';
-
-    let wanted;
-    let wantCustom = false;
-    if (modelDirty[kind]) {
-      wantCustom = sel.value === CUSTOM_VALUE;
-      wanted = wantCustom ? CUSTOM_VALUE : sel.value;
-    } else {
-      wanted = currentAppConfig[configKey] || '';
-    }
-
-    if (rawModelsData.length === 0 && !wanted) {
-      sel.innerHTML = '<option value="">Loading models…</option>';
-      return;
-    }
-
-    const groups = [
-      ['Google Gemini', m => m.category === 'gemini'],
-      ['Claude & GPT (3P)', m => m.category === 'claude_gpt'],
-      ['Other Models', m => m.category !== 'gemini' && m.category !== 'claude_gpt']
-    ];
-    let html = '';
-    groups.forEach(([label, test]) => {
-      const items = rawModelsData.filter(test);
-      if (items.length) html += '<optgroup label="' + label + '">' + items.map(m => optionHtml(m, wanted)).join('') + '</optgroup>';
-    });
-
-    // Preserve a configured / typed value that is not in the live list.
-    const known = wanted === CUSTOM_VALUE || rawModelsData.some(m => m.id === wanted);
-    if (wanted && !known) {
-      html = '<optgroup label="Configured"><option value="' + escapeHtml(wanted) + '" selected>' + escapeHtml(wanted) + ' (configured, not in list)</option></optgroup>' + html;
-    }
-    html += '<optgroup label="Other"><option value="' + CUSTOM_VALUE + '"' + (wanted === CUSTOM_VALUE ? ' selected' : '') + '>Custom model ID…</option></optgroup>';
-
-    const typed = input ? input.value : '';
-    sel.innerHTML = html;
-    if (wanted) sel.value = wanted;
-    if (input) input.value = typed;
-    syncCustomVisibility(kind);
-  }
-
-  function populateModelSelects() {
-    renderModelSelect('primary');
-    renderModelSelect('secondary');
-    updateDirtyMessage();
-  }
-
-  function onModelChange(kind) {
-    modelDirty[kind] = true;
-    syncCustomVisibility(kind);
-    if (selectFor(kind).value === CUSTOM_VALUE && customInputs[kind]) customInputs[kind].focus();
-    updateDirtyMessage();
-  }
-
-  async function handleSaveConfig() {
-    if (!btnSaveConfig) return;
-
-    const primaryVal = readModelValue('primary');
-    const secondaryVal = readModelValue('secondary');
-    const isFallbackEnabled = fallbackToggle ? fallbackToggle.checked : false;
-
-    if (!primaryVal || !secondaryVal) {
-      showToast('Choose a model for both slots, or enter a custom model ID.', 'error', 4500);
-      return;
-    }
-    // Same family is fine; only identical IDs are rejected.
-    if (primaryVal.toLowerCase() === secondaryVal.toLowerCase()) {
-      showToast('Primary and secondary must be different model IDs.', 'error', 4500);
-      return;
-    }
-
-    const origText = btnSaveConfig.textContent;
-    btnSaveConfig.disabled = true;
-    btnSaveConfig.textContent = 'Saving...';
-
-    const payload = {
-      model_primary: primaryVal,
-      model_secondary: secondaryVal,
-      fallback_secondary_enabled: isFallbackEnabled
-    };
-
-    try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error((errData && errData.error && errData.error.message) || ('HTTP ' + res.status));
-      }
-
-      const updated = await res.json();
-      currentAppConfig = updated;
-      modelDirty.primary = false;
-      modelDirty.secondary = false;
-      Object.values(customInputs).forEach(i => { if (i) i.value = ''; });
-      populateModelSelects();
-      showToast('Model fallback configuration saved successfully', 'success', 3000);
-      if (configStatusMsg) {
-        configStatusMsg.textContent = 'Saved at ' + new Date().toLocaleTimeString();
-        setTimeout(() => {
-          if (configStatusMsg) configStatusMsg.innerHTML = '<span id="model-dirty-msg" class="model-dirty"></span>';
-          updateDirtyMessage();
-        }, 4000);
-      }
-    } catch (err) {
-      showToast('Failed to save settings: ' + err.message, 'error', 5000);
-    } finally {
-      btnSaveConfig.disabled = false;
-      btnSaveConfig.textContent = origText;
-    }
-  }
-
   // Theme (light / dark), persisted
   const THEME_KEY = 'antigravity_theme';
   function applyTheme(theme) {
@@ -1278,6 +971,25 @@
     }
   }
 
+  document.getElementById('oauth-callback-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const input = document.getElementById('oauth-callback-url');
+    const status = document.getElementById('oauth-callback-status');
+    const button = event.currentTarget.querySelector('button');
+    const callbackURL = input.value.trim();
+    input.value = '';
+    button.disabled = true;
+    status.textContent = 'Completing authorization…';
+    try {
+      const response = await fetch('/oauth/submit-callback', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({callback_url:callbackURL})});
+      if (!response.ok) throw new Error('Callback rejected or authorization failed. Check the pending sign-in or start again.');
+      status.textContent = 'Account connected successfully.';
+      showToast('Account connected successfully.', 'success');
+      fetchAccounts(); fetchStatus();
+    } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+
   async function handleAddAccount() {
     const btn = document.getElementById('btn-add-account');
     if (btn) btn.disabled = true;
@@ -1286,6 +998,8 @@
       const res = await fetch('/oauth/start', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.auth_url) {
+        document.getElementById('oauth-pending').hidden = false;
+        document.getElementById('oauth-callback-status').textContent = 'Waiting for authorization.';
         showToast('Opening Google sign-in window...', 'info', 5000);
         const popup = window.open(data.auth_url, 'antigravity_oauth', 'width=600,height=700,status=no,toolbar=no');
         if (!popup || popup.closed || typeof popup.closed === 'undefined') {
@@ -1354,10 +1068,6 @@
         pillClass = 'pill-tokens';
         pillText = 'TOKENS';
         break;
-      case 'model_fallback':
-        pillClass = 'pill-fallback';
-        pillText = 'MODEL FALLBACK';
-        break;
       case 'error':
         pillClass = 'pill-error';
         pillText = 'ERROR';
@@ -1389,7 +1099,7 @@
 
   function matchesFilter(event, filter) {
     if (filter === 'all') return true;
-    if (filter === 'failover' && (event.type === 'failover_429' || event.type === 'model_fallback')) return true;
+    if (filter === 'failover' && (event.type === 'failover_429')) return true;
     if (filter === 'quota' && (event.type === 'quota_exhausted' || event.type === 'quota_restored')) return true;
     if (filter === 'tokens' && event.type === 'tokens_captured') return true;
     if (filter === 'error' && event.type === 'error') return true;
@@ -1450,8 +1160,6 @@
             fetchAccounts();
           } else if (event.type === 'tokens_captured') {
             fetchMetrics();
-          } else if (event.type === 'model_fallback') {
-            fetchConfig();
           }
         } catch (err) {
           console.warn('Failed to parse SSE payload:', err);
@@ -1467,38 +1175,6 @@
   // =========================================================================
 
   function initListeners() {
-    // Model fallback toggle
-    if (fallbackToggle) {
-      fallbackToggle.addEventListener('change', () => {
-        updateToggleStatusText(fallbackToggle.checked);
-      });
-    }
-
-    // Dynamic secondary model options on primary model change
-    if (selectModelPrimary) {
-      selectModelPrimary.addEventListener('change', () => onModelChange('primary'));
-    }
-
-    if (selectModelSecondary) {
-      selectModelSecondary.addEventListener('change', () => onModelChange('secondary'));
-    }
-    ['primary', 'secondary'].forEach(k => {
-      if (customInputs[k]) customInputs[k].addEventListener('input', () => { modelDirty[k] = true; updateDirtyMessage(); });
-    });
-
-    // Save model fallback settings
-    if (btnSaveConfig) {
-      btnSaveConfig.addEventListener('click', handleSaveConfig);
-    }
-
-    // Refresh models button
-    if (btnRefreshModels) {
-      btnRefreshModels.addEventListener('click', async () => {
-        await fetchModels();
-        showToast('AI models refreshed from Antigravity', 'info', 2000);
-      });
-    }
-
     // Sync / Refresh Quotas button
     const btnRefresh = document.getElementById('btn-refresh');
     const refreshIcon = document.getElementById('refresh-icon');
@@ -1652,8 +1328,8 @@
     fetchStatus();
     fetchAccounts();
     fetchMetrics();
-    fetchConfig();
-    fetchModels();
+
+
     setupSSE();
 
     // Trigger one initial quota synchronization pass
@@ -1667,7 +1343,7 @@
     // Live local ticker for quota cooldowns (ticks every 1s, zero network cost)
     setInterval(updateCooldownTimers, 1000);
 
-    // Fallback sync polling every 30 seconds
+    // Dashboard sync polling every 30 seconds
     setInterval(() => {
       fetchStatus();
       fetchAccounts();

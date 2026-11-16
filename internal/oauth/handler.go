@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -418,11 +419,18 @@ func (s *StateStore) GetAndRemove(state string) (*PendingAuth, bool) {
 	defer s.mu.Unlock()
 	s.cleanupLocked()
 
-	auth, ok := s.entries[state]
-	if !ok {
+	var auth *PendingAuth
+	var key string
+	for candidate, value := range s.entries {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(state)) == 1 {
+			auth = value
+			key = candidate
+		}
+	}
+	if auth == nil {
 		return nil, false
 	}
-	delete(s.entries, state)
+	delete(s.entries, key)
 	if time.Since(auth.CreatedAt) > s.ttl {
 		return nil, false
 	}
@@ -494,6 +502,8 @@ type OAuthService struct {
 	accountRepo domain.AccountRepository
 	stateStore  *StateStore
 	client      *http.Client
+	pendingMu   sync.Mutex
+	completions map[string]func(*domain.Account, error)
 }
 
 // NewOAuthService constructs a new OAuthService.
@@ -534,6 +544,7 @@ func NewOAuthService(accountRepo domain.AccountRepository, opts ...Option) *OAut
 		accountRepo: accountRepo,
 		stateStore:  NewStateStore(cfg.StateTTL),
 		client:      client,
+		completions: make(map[string]func(*domain.Account, error)),
 	}
 }
 
@@ -587,32 +598,39 @@ func (s *OAuthService) StartLoopbackFlow(ctx context.Context, opener BrowserOpen
 	})
 
 	authURL := s.BuildAuthURL(redirectURI, state, pkce.Challenge)
-	if urlLogger != nil {
-		urlLogger(authURL)
-	}
 
 	type authResult struct {
 		account *domain.Account
 		err     error
 	}
 	resultChan := make(chan authResult, 1)
+	s.pendingMu.Lock()
+	s.completions[state] = func(acc *domain.Account, err error) {
+		select {
+		case resultChan <- authResult{account: acc, err: err}:
+		default:
+		}
+	}
+	s.pendingMu.Unlock()
+	defer func() {
+		s.pendingMu.Lock()
+		delete(s.completions, state)
+		s.pendingMu.Unlock()
+		s.stateStore.GetAndRemove(state)
+	}()
+	if urlLogger != nil {
+		urlLogger(authURL)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
 		acc, err := s.HandleCallbackRequest(r)
 		if err != nil {
-			s.renderErrorHTML(w, err.Error())
-			select {
-			case resultChan <- authResult{err: err}:
-			default:
-			}
+			s.renderErrorHTML(w, "Authorization could not be completed. Please start sign-in again.")
+
 			return
 		}
 		s.renderSuccessHTML(w, acc.Email)
-		select {
-		case resultChan <- authResult{account: acc}:
-		default:
-		}
 	})
 
 	server := &http.Server{
@@ -687,6 +705,19 @@ func (s *OAuthService) HandleCallbackRequest(r *http.Request) (*domain.Account, 
 		return nil, errors.New("invalid, expired, or already consumed OAuth state parameter")
 	}
 
+	return s.finishPending(ctx, code, pending)
+}
+
+// finishPending is called only by the winner of atomic state consumption.
+func (s *OAuthService) finishPending(ctx context.Context, code string, pending *PendingAuth) (account *domain.Account, err error) {
+	defer func() {
+		s.pendingMu.Lock()
+		complete := s.completions[pending.State]
+		s.pendingMu.Unlock()
+		if complete != nil {
+			complete(account, err)
+		}
+	}()
 	tokenResp, err := s.ExchangeCode(ctx, code, pending.CodeVerifier, pending.RedirectURI)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange failed: %w", err)
@@ -702,7 +733,7 @@ func (s *OAuthService) HandleCallbackRequest(r *http.Request) (*domain.Account, 
 	}
 
 	expiry := time.Now().UTC().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-	account, err := s.UpsertAccount(ctx, userInfo.Email, tokenResp.AccessToken, tokenResp.RefreshToken, expiry)
+	account, err = s.UpsertAccount(ctx, userInfo.Email, tokenResp.AccessToken, tokenResp.RefreshToken, expiry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store authenticated account: %w", err)
 	}
@@ -1085,4 +1116,41 @@ func (s *OAuthService) renderErrorHTML(w http.ResponseWriter, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	_ = errorTemplate.Execute(w, struct{ ErrorMessage string }{ErrorMessage: errMsg})
+}
+
+// SubmitCallbackURL completes an outstanding local flow in process. It never fetches the supplied URL.
+func (s *OAuthService) SubmitCallbackURL(ctx context.Context, raw string) (*domain.Account, error) {
+	invalid := errors.New("invalid, expired, or already used callback URL")
+	if len(raw) > 8192 {
+		return nil, invalid
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Hostname() != "127.0.0.1" || u.Port() == "" || u.Path != "/oauth/callback" || u.RawPath != "" || u.Fragment != "" || u.Opaque != "" {
+		return nil, invalid
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(q["state"]) != 1 || len(q["code"]) != 1 || q.Get("code") == "" {
+		return nil, invalid
+	}
+	state := q.Get("state")
+	s.stateStore.mu.Lock()
+	s.stateStore.cleanupLocked()
+	var claimed *PendingAuth
+	for key, pending := range s.stateStore.entries {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(state)) == 1 && u.Scheme+"://"+u.Host+u.EscapedPath() == pending.RedirectURI {
+			claimed = pending
+			delete(s.stateStore.entries, key)
+			break
+		}
+	}
+	s.stateStore.mu.Unlock()
+	if claimed == nil {
+		return nil, invalid
+	}
+	acc, err := s.finishPending(ctx, q.Get("code"), claimed)
+
+	if err != nil {
+		return nil, errors.New("authorization could not be completed; start sign-in again")
+	}
+	return acc, nil
 }

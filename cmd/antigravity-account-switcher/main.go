@@ -105,14 +105,7 @@ func defaultDBPath() string {
 	return config.DefaultDBPath()
 }
 
-// addModelFlags registers model fallback flags on the provided FlagSet,
 // with defaults populated from the current loaded configuration.
-func addModelFlags(fs *flag.FlagSet, cfg *config.Config) (fallbackSecondary *bool, modelPrimary *string, modelSecondary *string) {
-	fallbackSecondary = fs.Bool("fallback-secondary", cfg.FallbackSecondaryEnabled, "Enable intra-account secondary model fallback before account rotation")
-	modelPrimary = fs.String("model-primary", cfg.ModelPrimary, "Primary model identifier")
-	modelSecondary = fs.String("model-secondary", cfg.ModelSecondary, "Secondary model fallback identifier")
-	return
-}
 
 func runServe(args []string) {
 	cfg, err := config.Load()
@@ -139,26 +132,19 @@ func runServe(args []string) {
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", defaultPort, "Web dashboard and proxy port")
-	bind := fs.String("bind", "127.0.0.1", "Bind address")
+	fs.IntVar(port, "dashboard-port", defaultPort, "Loopback dashboard port")
+	bind := fs.String("bind", "127.0.0.1", "Bind address (only 127.0.0.1 is supported)")
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Background quota polling interval")
 	targetURL := fs.String("target-url", defaultTargetURL, "Google Cloud Code PA upstream target")
-	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
 	_ = fs.Parse(args)
 
 	cfg.Port = *port
 	cfg.UpstreamURL = *targetURL
-	cfg.FallbackSecondaryEnabled = *fallbackSecondary
-	cfg.ModelPrimary = *modelPrimary
-	cfg.ModelSecondary = *modelSecondary
 
 	if err := cfg.Validate(); err != nil {
-		if strings.Contains(err.Error(), "cannot be identical") {
-			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-			os.Exit(1)
-		}
+		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Initializing Antigravity Account Switcher v%s...\n", Version)
@@ -185,7 +171,6 @@ func runServe(args []string) {
 		broadcaster,
 		eventRepo,
 		proxy.WithQuotaRepository(quotaRepo),
-		proxy.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
 	)
 	oauthService := oauth.NewOAuthService(accRepo)
 
@@ -245,12 +230,11 @@ func runServe(args []string) {
 		eventRepo,
 		oauthService,
 		web.WithPort(*port),
-		web.WithBindAddr(*bind),
+		web.WithBindAddr("127.0.0.1"),
 		web.WithVersion(Version),
 		web.WithProxyHandler(proxyHandler),
 		web.WithPoller(poller),
 		web.WithConfig(cfg),
-		web.WithFallbackConfigSetter(failoverEngine),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating web server: %v\n", err)
@@ -267,11 +251,7 @@ func runServe(args []string) {
 	fmt.Printf("    Web Dashboard: http://%s:%d/\n", *bind, boundPort)
 	fmt.Printf("    Proxy Port:    http://%s:%d/\n", *bind, boundPort)
 	fmt.Printf("    Quota Daemon:  Active (interval: %v)\n", *pollInterval)
-	if cfg.FallbackSecondaryEnabled {
-		fmt.Printf("    Model Fallback: Enabled (%s -> %s)\n", cfg.ModelPrimary, cfg.ModelSecondary)
-	} else {
-		fmt.Printf("    Model Fallback: Disabled\n")
-	}
+
 	fmt.Println("\nPress Ctrl+C to stop.")
 
 	<-ctx.Done()
@@ -305,12 +285,11 @@ func runWrap(args []string) {
 	}
 
 	fs := flag.NewFlagSet("wrap", flag.ExitOnError)
-	port := fs.Int("port", 0, "Switcher port (0 for random ephemeral port)")
+	port := fs.Int("port", cfg.Port, "Dashboard port (default configured port or 8080)")
+	fs.IntVar(port, "dashboard-port", cfg.Port, "Loopback dashboard port")
 	dbPath := fs.String("db", defaultDBPath(), "Path to SQLite database file")
 	targetURL := fs.String("target-url", defaultTargetURL, "Google Cloud Code PA upstream target")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Quota polling interval")
-
-	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
 
 	// Separate launcher flags from command line
 	var cmdToRun []string
@@ -341,9 +320,6 @@ func runWrap(args []string) {
 		cfg.Port = *port
 	}
 	cfg.UpstreamURL = *targetURL
-	cfg.FallbackSecondaryEnabled = *fallbackSecondary
-	cfg.ModelPrimary = *modelPrimary
-	cfg.ModelSecondary = *modelSecondary
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -369,7 +345,6 @@ func runWrap(args []string) {
 		launcher.WithDBPath(*dbPath),
 		launcher.WithTargetURL(*targetURL),
 		launcher.WithPollInterval(*pollInterval),
-		launcher.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
 	)
 
 	if err != nil {
@@ -525,6 +500,8 @@ func runStatus(args []string) {
 		fmt.Printf("Account Status:  %s\n", active.Status)
 	}
 
+	printFamilyActives(ctx, sqlite.NewQuotaRepository(db), accRepo)
+
 	// Print token summary if available
 	summary, err := metricsService.GetGlobalSummary(ctx, domain.PeriodLifetime)
 	if err == nil && summary != nil {
@@ -553,13 +530,12 @@ func runLaunch(args []string) {
 	fs := flag.NewFlagSet("launch", flag.ExitOnError)
 	binFlag := fs.String("bin", "", "Path to Antigravity 2.0 binary (overrides auto-detection)")
 	port := fs.Int("port", cfg.Port, "Proxy and web dashboard port (defaults to configured port)")
+	fs.IntVar(port, "dashboard-port", cfg.Port, "Loopback dashboard port")
 	openUI := fs.Bool("open", false, "Open web dashboard in default browser on launch")
 	ui := fs.Bool("ui", false, "Alias for --open")
 	dbPath := fs.String("db", cfg.DBPath, "Path to SQLite database file")
 	targetURL := fs.String("target-url", cfg.UpstreamURL, "Google Cloud Code PA upstream target")
 	pollInterval := fs.Duration("poll-interval", defaultPollInterval, "Quota polling interval")
-
-	fallbackSecondary, modelPrimary, modelSecondary := addModelFlags(fs, cfg)
 
 	dashDashIdx := -1
 	for i, arg := range args {
@@ -582,9 +558,6 @@ func runLaunch(args []string) {
 
 	cfg.Port = *port
 	cfg.UpstreamURL = *targetURL
-	cfg.FallbackSecondaryEnabled = *fallbackSecondary
-	cfg.ModelPrimary = *modelPrimary
-	cfg.ModelSecondary = *modelSecondary
 
 	if err := cfg.Validate(); err != nil {
 		if strings.Contains(err.Error(), "cannot be identical") {
@@ -631,7 +604,6 @@ func runLaunch(args []string) {
 		launcher.WithDBPath(*dbPath),
 		launcher.WithTargetURL(*targetURL),
 		launcher.WithPollInterval(*pollInterval),
-		launcher.WithModelFallback(cfg.ModelPrimary, cfg.ModelSecondary, cfg.FallbackSecondaryEnabled),
 	)
 
 	if err != nil {
@@ -669,9 +641,6 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  upstream_url:               %s\n", cfg.UpstreamURL)
 		fmt.Fprintf(stdout, "  quota_interval:             %s\n", cfg.QuotaInterval)
 		fmt.Fprintf(stdout, "  open_browser:               %t\n", cfg.OpenBrowser)
-		fmt.Fprintf(stdout, "  model_primary:              %s\n", cfg.ModelPrimary)
-		fmt.Fprintf(stdout, "  model_secondary:            %s\n", cfg.ModelSecondary)
-		fmt.Fprintf(stdout, "  fallback_secondary_enabled: %t\n", cfg.FallbackSecondaryEnabled)
 		if cfg.ClientID != "" {
 			fmt.Fprintf(stdout, "  client_id:                  %s\n", cfg.ClientID)
 		}
@@ -709,12 +678,6 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, cfg.QuotaInterval)
 		case "open_browser":
 			fmt.Fprintln(stdout, cfg.OpenBrowser)
-		case "model_primary":
-			fmt.Fprintln(stdout, cfg.ModelPrimary)
-		case "model_secondary":
-			fmt.Fprintln(stdout, cfg.ModelSecondary)
-		case "fallback_secondary_enabled":
-			fmt.Fprintln(stdout, cfg.FallbackSecondaryEnabled)
 		case "client_id":
 			fmt.Fprintln(stdout, cfg.ClientID)
 		case "client_secret":
@@ -767,27 +730,6 @@ func executeConfig(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			cfg.OpenBrowser = b
-		case "model_primary":
-			trimmed := strings.TrimSpace(val)
-			if trimmed == "" {
-				fmt.Fprintf(stderr, "Invalid model_primary: value cannot be empty\n")
-				return 1
-			}
-			cfg.ModelPrimary = trimmed
-		case "model_secondary":
-			trimmed := strings.TrimSpace(val)
-			if trimmed == "" {
-				fmt.Fprintf(stderr, "Invalid model_secondary: value cannot be empty\n")
-				return 1
-			}
-			cfg.ModelSecondary = trimmed
-		case "fallback_secondary_enabled":
-			b, err := config.ParseBool(val)
-			if err != nil {
-				fmt.Fprintf(stderr, "Invalid boolean value for fallback_secondary_enabled: %s (expected true, false, 1, or 0)\n", val)
-				return 1
-			}
-			cfg.FallbackSecondaryEnabled = b
 		case "client_id":
 			cfg.ClientID = strings.TrimSpace(val)
 		case "client_secret":
@@ -896,9 +838,21 @@ func runRefreshQuotas(args []string) {
 
 	ctx := context.Background()
 	fmt.Println("Polling live quotas directly from Google across all registered accounts...")
-	if err := poller.PollOnce(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "PollOnce failed: %v\n", err)
-		os.Exit(1)
+	pollAccounts, err := accRepo.List(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list accounts: %v\n", err)
+		return
+	}
+	live := make(map[string]bool)
+	for _, acc := range pollAccounts {
+		if acc.Status == domain.AccountStatusDisabled {
+			continue
+		}
+		if buckets, pollErr := poller.PollAccount(ctx, acc.ID); pollErr != nil {
+			fmt.Fprintf(os.Stderr, "%s: live quota refresh failed (%v); quota-endpoint 403 blocks the account and hides cached percentages.\n", acc.Email, pollErr)
+		} else if len(buckets) > 0 {
+			live[acc.ID] = true
+		}
 	}
 
 	accounts, err := accRepo.List(ctx)
@@ -913,13 +867,31 @@ func runRefreshQuotas(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Println("\nUpdated Live Quotas:")
+	fmt.Println("\nQuota evidence (live only where refresh succeeded; otherwise cached/unverified):")
 	for _, acc := range accounts {
 		activeMarker := " "
 		if acc.IsActive {
 			activeMarker = "*"
 		}
-		fmt.Printf("\n[%s] %s (%s):\n", activeMarker, acc.Email, acc.Status)
+		evidence := "cached/unverified"
+		if live[acc.ID] {
+			evidence = "live refresh"
+		}
+		blocked, availabilityErr := quotaRepo.IsQuotaUnavailable(ctx, acc.ID)
+		if blocked || availabilityErr != nil {
+			fmt.Printf("\n[%s] %s (account status: %s): UNAVAILABLE - quota endpoint permission denied or availability check failed; successful live quota poll required.\n", activeMarker, acc.Email, acc.Status)
+			continue
+		}
+		fmt.Printf("\n[%s] %s (account status: %s; %s):\n", activeMarker, acc.Email, acc.Status, evidence)
+		for _, family := range []domain.QuotaFamily{domain.QuotaFamilyArgon, domain.QuotaFamilyGemini, domain.QuotaFamilyClaudeGPT} {
+			reset, cooldownErr := quotaRepo.GetFamilyCooldown(ctx, acc.ID, family)
+			line := formatFamilyQuotaStatus(acc, family, allBuckets[acc.ID], reset, cooldownErr, time.Now().UTC())
+			activeID, _ := quotaRepo.GetFamilyActive(ctx, family)
+			if activeID == acc.ID {
+				line += " [ACTIVE]"
+			}
+			fmt.Println("  " + line)
+		}
 		for _, b := range allBuckets[acc.ID] {
 			pct := int(b.RemainingFraction * 100)
 			resetStr := "-"
@@ -928,5 +900,67 @@ func runRefreshQuotas(args []string) {
 			}
 			fmt.Printf("  • %-32s [%-6s]: %3d%% (reset: %s)\n", b.DisplayName, b.Window, pct, resetStr)
 		}
+	}
+}
+
+// formatFamilyQuotaStatus describes evidence, never an inferred quota percentage.
+func formatFamilyQuotaStatus(acc *domain.Account, family domain.QuotaFamily, buckets []*domain.QuotaBucket, cooldown time.Time, cooldownErr error, now time.Time) string {
+	known, available := domain.FamilyQuota(buckets, family, now)
+	status := "eligible (no known quota block)"
+	var reset time.Time
+	unknownReset := false
+	for _, b := range buckets {
+		if domain.BucketFamily(b) != family || !b.IsExhausted() || b.HasReset(now) {
+			continue
+		}
+		if b.ResetTime.IsZero() {
+			unknownReset = true
+		} else if b.ResetTime.After(reset) {
+			reset = b.ResetTime
+		}
+	}
+	if !known {
+		status = "unknown (no matching quota evidence)"
+	}
+	if !available {
+		status = "blocked by quota evidence"
+	}
+	if cooldown.After(now) {
+		status = "cooldown"
+		if cooldown.After(reset) {
+			reset = cooldown
+		}
+	}
+	if cooldownErr != nil {
+		status = "unavailable (cooldown lookup failed)"
+	}
+	if acc.Status == domain.AccountStatusError || acc.Status == domain.AccountStatusDisabled {
+		status = "unavailable (account " + string(acc.Status) + ")"
+	}
+	if acc.Status == domain.AccountStatusExhausted && !known {
+		status = "unavailable (legacy exhaustion; no family evidence)"
+	}
+	resetLabel := "none pending"
+	if !reset.IsZero() {
+		resetLabel = reset.UTC().Format(time.RFC3339)
+	}
+	if unknownReset {
+		resetLabel += " (another blocked window has unknown reset)"
+	}
+	return fmt.Sprintf("%s: %s; reset: %s", family, status, resetLabel)
+}
+
+func printFamilyActives(ctx context.Context, repo domain.FamilyActiveRepository, accounts domain.AccountRepository) {
+	for _, family := range []domain.QuotaFamily{domain.QuotaFamilyClaudeGPT, domain.QuotaFamilyGemini, domain.QuotaFamilyArgon} {
+		id, err := repo.GetFamilyActive(ctx, family)
+		label := "not selected (automatic on next request)"
+		if err != nil {
+			label = "unavailable"
+		} else if id != "" {
+			if acc, e := accounts.GetByID(ctx, id); e == nil {
+				label = acc.Email + " (" + id + ")"
+			}
+		}
+		fmt.Printf("Active %s: %s\n", family, label)
 	}
 }
