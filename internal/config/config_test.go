@@ -33,11 +33,11 @@ func TestDefaultConfig(t *testing.T) {
 func TestConfig_ModelDefaults(t *testing.T) {
 	t.Parallel()
 
-	if DefaultModelPrimary != "gemini-2.5-pro" {
-		t.Errorf("expected DefaultModelPrimary to be gemini-2.5-pro, got %s", DefaultModelPrimary)
+	if DefaultModelPrimary != "gemini-3.8-flash-high" {
+		t.Errorf("expected DefaultModelPrimary to be gemini-3.8-flash-high, got %s", DefaultModelPrimary)
 	}
-	if DefaultModelSecondary != "claude-3-5-sonnet" {
-		t.Errorf("expected DefaultModelSecondary to be claude-3-5-sonnet, got %s", DefaultModelSecondary)
+	if DefaultModelSecondary != "claude-sonnet-5-5" {
+		t.Errorf("expected DefaultModelSecondary to be claude-sonnet-5-5, got %s", DefaultModelSecondary)
 	}
 	if DefaultFallbackSecondaryEnabled != false {
 		t.Errorf("expected DefaultFallbackSecondaryEnabled to be false, got %t", DefaultFallbackSecondaryEnabled)
@@ -56,7 +56,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		QuotaInterval:            "30s",
 		OpenBrowser:              true,
 		ModelPrimary:             "claude-3-7-sonnet",
-		ModelSecondary:           "claude-3-5-sonnet",
+		ModelSecondary:           "claude-sonnet-5-5",
 		FallbackSecondaryEnabled: true,
 	}
 
@@ -78,8 +78,8 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	if loaded.ModelPrimary != "claude-3-7-sonnet" {
 		t.Errorf("expected ModelPrimary 'claude-3-7-sonnet', got %s", loaded.ModelPrimary)
 	}
-	if loaded.ModelSecondary != "claude-3-5-sonnet" {
-		t.Errorf("expected ModelSecondary 'claude-3-5-sonnet', got %s", loaded.ModelSecondary)
+	if loaded.ModelSecondary != "claude-sonnet-5-5" {
+		t.Errorf("expected ModelSecondary 'claude-sonnet-5-5', got %s", loaded.ModelSecondary)
 	}
 	if !loaded.FallbackSecondaryEnabled {
 		t.Errorf("expected FallbackSecondaryEnabled true, got %t", loaded.FallbackSecondaryEnabled)
@@ -99,8 +99,8 @@ func TestConfig_JSONSerialization_RoundTrip(t *testing.T) {
 		UpstreamURL:              "https://daily-cloudcode-pa.googleapis.com",
 		QuotaInterval:            "5m",
 		OpenBrowser:              false,
-		ModelPrimary:             "claude-3-5-sonnet",
-		ModelSecondary:           "claude-3-5-sonnet",
+		ModelPrimary:             "claude-sonnet-5-5",
+		ModelSecondary:           "claude-sonnet-5-5",
 		FallbackSecondaryEnabled: true,
 	}
 
@@ -110,10 +110,10 @@ func TestConfig_JSONSerialization_RoundTrip(t *testing.T) {
 	}
 
 	rawJSON := string(data)
-	if !strings.Contains(rawJSON, `"model_primary":"claude-3-5-sonnet"`) {
+	if !strings.Contains(rawJSON, `"model_primary":"claude-sonnet-5-5"`) {
 		t.Errorf("expected json to contain model_primary, got %s", rawJSON)
 	}
-	if !strings.Contains(rawJSON, `"model_secondary":"claude-3-5-sonnet"`) {
+	if !strings.Contains(rawJSON, `"model_secondary":"claude-sonnet-5-5"`) {
 		t.Errorf("expected json to contain model_secondary, got %s", rawJSON)
 	}
 	if !strings.Contains(rawJSON, `"fallback_secondary_enabled":true`) {
@@ -192,9 +192,9 @@ func TestConfig_EnvOverrides_Models(t *testing.T) {
 		},
 		{
 			name:             "override secondary only",
-			envSecondary:     "gemini-2.5-pro",
+			envSecondary:     "gemini-3.8-flash-high",
 			expectedPrimary:  DefaultModelPrimary,
-			expectedSecond:   "gemini-2.5-pro",
+			expectedSecond:   "gemini-3.8-flash-high",
 			expectedFallback: false,
 		},
 		{
@@ -336,8 +336,8 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with valid distinct models",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "gemini-2.5-pro"
-				c.ModelSecondary = "claude-3-5-sonnet"
+				c.ModelPrimary = "gemini-3.8-flash-high"
+				c.ModelSecondary = "claude-sonnet-5-5"
 			},
 			expectErr: false,
 		},
@@ -345,7 +345,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with same family gemini models is valid",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "gemini-2.5-pro"
+				c.ModelPrimary = "gemini-3.8-flash-high"
 				c.ModelSecondary = "gemini-2.5-flash"
 			},
 			expectErr: false,
@@ -355,7 +355,7 @@ func TestConfig_Validate(t *testing.T) {
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
 				c.ModelPrimary = "claude-3-7-sonnet"
-				c.ModelSecondary = "claude-3-5-sonnet"
+				c.ModelSecondary = "claude-sonnet-5-5"
 			},
 			expectErr: false,
 		},
@@ -364,7 +364,7 @@ func TestConfig_Validate(t *testing.T) {
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
 				c.ModelPrimary = ""
-				c.ModelSecondary = "claude-3-5-sonnet"
+				c.ModelSecondary = "claude-sonnet-5-5"
 			},
 			expectErr: true,
 			errSubstr: "model_primary cannot be empty",
@@ -374,7 +374,7 @@ func TestConfig_Validate(t *testing.T) {
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
 				c.ModelPrimary = "   "
-				c.ModelSecondary = "claude-3-5-sonnet"
+				c.ModelSecondary = "claude-sonnet-5-5"
 			},
 			expectErr: true,
 			errSubstr: "model_primary cannot be empty",
@@ -383,7 +383,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with empty model_secondary",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "gemini-2.5-pro"
+				c.ModelPrimary = "gemini-3.8-flash-high"
 				c.ModelSecondary = ""
 			},
 			expectErr: true,
@@ -393,7 +393,7 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with whitespace model_secondary",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "gemini-2.5-pro"
+				c.ModelPrimary = "gemini-3.8-flash-high"
 				c.ModelSecondary = "   \t\n"
 			},
 			expectErr: true,
@@ -403,8 +403,8 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with identical models",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "gemini-2.5-pro"
-				c.ModelSecondary = "gemini-2.5-pro"
+				c.ModelPrimary = "gemini-3.8-flash-high"
+				c.ModelSecondary = "gemini-3.8-flash-high"
 			},
 			expectErr: true,
 			errSubstr: "cannot be identical",
@@ -413,8 +413,8 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with case-insensitive identical models",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "Gemini-2.5-Pro"
-				c.ModelSecondary = "gemini-2.5-pro"
+				c.ModelPrimary = "Gemini-3.8-Flash-High"
+				c.ModelSecondary = "gemini-3.8-flash-high"
 			},
 			expectErr: true,
 			errSubstr: "cannot be identical",
@@ -423,8 +423,8 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback enabled with whitespace-padded identical models",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = true
-				c.ModelPrimary = "  gemini-2.5-pro  "
-				c.ModelSecondary = "gemini-2.5-pro"
+				c.ModelPrimary = "  gemini-3.8-flash-high  "
+				c.ModelSecondary = "gemini-3.8-flash-high"
 			},
 			expectErr: true,
 			errSubstr: "cannot be identical",
@@ -442,8 +442,8 @@ func TestConfig_Validate(t *testing.T) {
 			name: "fallback disabled with identical models does not fail",
 			modify: func(c *Config) {
 				c.FallbackSecondaryEnabled = false
-				c.ModelPrimary = "gemini-2.5-pro"
-				c.ModelSecondary = "gemini-2.5-pro"
+				c.ModelPrimary = "gemini-3.8-flash-high"
+				c.ModelSecondary = "gemini-3.8-flash-high"
 			},
 			expectErr: false,
 		},

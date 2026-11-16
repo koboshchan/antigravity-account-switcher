@@ -1,334 +1,127 @@
+<a id="readme-top"></a>
+
 # Antigravity Account Switcher
 
-[English](README.md) | [Português (Brasil)](README.pt-BR.md)
+[English](README.md) · Português (Brasil)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go)](https://go.dev/)
-[![CI Status](https://github.com/Muriel-Gasparini/antigravity-account-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/Muriel-Gasparini/antigravity-account-switcher/actions)
-[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/Muriel-Gasparini/antigravity-account-switcher?utm_source=oss&utm_medium=github&utm_campaign=Muriel-Gasparini%2Fantigravity-account-switcher&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
+[![MIT](https://img.shields.io/github/license/koboshchan/antigravity-account-switcher)](LICENSE)
+[![CI](https://github.com/koboshchan/antigravity-account-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/koboshchan/antigravity-account-switcher/actions/workflows/ci.yml)
 
-Gerenciamento automático de pool de contas, monitoramento de cotas em tempo real e failover transparente em erros HTTP 429 para o **Google Antigravity 2.0** e CLI (`agy`).
+Pool local de contas, painel de cotas em tempo real e proxy com alternância de contas em respostas HTTP 429 para Antigravity e `agy`.
 
----
+## Sobre o projeto
 
-## O que é o Antigravity 2.0 e por que esta ferramenta é necessária?
+O switcher supervisiona o Antigravity ou executa uma CLI com configurações de proxy restritas ao processo. Substitui a autorização enviada ao serviço pela conta selecionada no pool, consulta cotas no Google Cloud Code PA e alterna contas ao receber respostas compatíveis de esgotamento de cota. Requisições armazenadas em memória podem ser repetidas antes do envio da resposta ao cliente; um stream já iniciado não pode ser repetido de forma transparente.
 
-O **Google Antigravity 2.0** é o novo aplicativo desktop de desenvolvimento com IA criado pela equipe do Google DeepMind (completamente independente e diferente das antigas extensões de preview para VS Code).
+O painel integrado mostra contas, cotas, uso de tokens e eventos do proxy. O fallback opcional tenta outro modelo antes de alternar de conta. Permissões e cotas do Google continuam determinando o acesso.
 
-Ao trabalhar intensamente com o Antigravity 2.0, é muito comum atingir os limites de requisições (`HTTP 429 RESOURCE_EXHAUSTED` ou a janela deslizante de 5 horas de cota) nos modelos Claude, GPT e Gemini.
+Desenvolvido com Go 1.24+, SQLite em Go puro (`modernc.org/sqlite`) e HTML, CSS e JavaScript incorporados. Não exige compilação com Node nem bibliotecas C em tempo de execução.
 
-O **Antigravity Account Switcher** roda como um supervisor local transparente e de alta performance que intercepta as requisições do Antigravity 2.0. Quando a conta ativa esgota sua cota, o switcher **alterna instantaneamente para a próxima conta disponível no seu pool e repete a requisição em memória** — sem interromper o raciocínio do agente, sem quebrar os streams de resposta e sem gerar erros na interface.
+## Mudanças deste fork
 
----
+Este fork acompanha o [projeto original de Muriel Gasparini](https://github.com/Muriel-Gasparini/antigravity-account-switcher).
 
-## Instalando o Google Antigravity 2.0 no Linux
+O comando independente `refresh-quotas` agora utiliza a renovação de tokens OAuth, permitindo renovar tokens expirados antes de consultar cotas. Durante a migração, estados de erro antigos foram limpos somente após renovação e consulta bem-sucedidas. Foi um reparo local pontual, não uma redefinição automática de todas as contas com erro.
 
-> [!IMPORTANT]
-> **O Google Antigravity 2.0 NÃO é distribuído via gerenciadores de pacotes (`apt`, `snap`, `dnf`, `pacman` ou `flatpak`).**  
-> O Google disponibiliza a aplicação diretamente como um arquivo `.tar.gz` contendo o binário executável e as bibliotecas necessárias.
+O proxy não substitui mais todos os modelos solicitados pelo modelo primário do painel. IDs no corpo, caminho e parâmetros de consulta são preservados, incluindo Argon, Hydrogen, Helium e IDs futuros. Testes de regressão cobrem esses casos. Isso não libera modelos ausentes do catálogo Google da conta.
 
-No Linux, programas distribuídos dessa forma devem ser instalados ou na **Pasta de Usuário XDG** (recomendado, não exige root nem `sudo`) ou na **Pasta do Sistema `/opt`** (requer privilégios de administrador).
+O painel atualizado oferece temas claro e escuro com preferência salva. A descoberta de modelos prioriza o catálogo Google da conta e identifica a origem dos dados; listas de fallback são marcadas como não verificadas. É possível inserir um ID personalizado nos seletores. Nem a lista nem um ID personalizado garantem acesso ao modelo.
 
-### Opção 1: Instalação de Usuário (Recomendada — Sem necessidade de `sudo`)
+## Instalação
 
-Essa opção segue a especificação **Linux XDG Base Directory** (`~/.local/share/` e `~/.local/bin/`). Ela não afeta outros usuários da máquina nem arquivos do sistema operacional:
+Use Linux ou WSL com Git, Make, Go 1.24 ou mais recente e uma instalação existente do Antigravity ou `agy`.
 
-```bash
-# 1. Cria a pasta da aplicação
-mkdir -p ~/.local/share/antigravity
-
-# 2. Descompacta o arquivo baixado do Google
-tar -xzf ~/Downloads/Antigravity-linux-x64.tar.gz -C ~/.local/share/antigravity --strip-components=1
-
-# 3. Garante permissão de execução no binário
-chmod +x ~/.local/share/antigravity/antigravity
-
-# 4. Cria o atalho em ~/.local/bin (já presente no PATH das principais distribuições Linux)
-mkdir -p ~/.local/bin
-ln -sf ~/.local/share/antigravity/antigravity ~/.local/bin/antigravity
-```
-
-### Opção 2: Instalação no Sistema (Requer `sudo` / Padrão FHS)
-
-Segue o padrão **Filesystem Hierarchy Standard (FHS)** para softwares de terceiros em `/opt`:
-
-```bash
-# 1. Cria a pasta no sistema
-sudo mkdir -p /opt/antigravity
-
-# 2. Descompacta o arquivo
-sudo tar -xzf ~/Downloads/Antigravity-linux-x64.tar.gz -C /opt/antigravity --strip-components=1
-
-# 3. Cria o link simbólico global
-sudo ln -sf /opt/antigravity/antigravity /usr/local/bin/antigravity
-```
-
----
-
-## Como o Switcher se Conecta ao Antigravity 2.0
-
-### Detecção Automática (Zero Configuração)
-Se você seguiu qualquer um dos métodos de instalação recomendados acima, **você não precisa configurar nenhum caminho manualmente**.  
-Ao executar `antigravity-account-switcher launch`, o switcher busca automaticamente o executável nos caminhos padrão do Linux:
-1. `~/.local/bin/antigravity`
-2. `~/.local/share/antigravity/antigravity`
-3. `/usr/local/bin/antigravity`
-4. `/opt/antigravity/antigravity`
-5. `~/tools/Antigravity/Antigravity-x64/antigravity` *(fallback para pastas personalizadas)*
-6. Qualquer comando `antigravity` ou `agy` presente no `$PATH` do seu sistema
-
-### Configuração de Caminho Personalizado
-Caso tenha descompactado o Antigravity 2.0 em uma pasta diferente, você pode especificar o caminho facilmente por qualquer um destes métodos:
-
-**Método 1: Configuração permanente via CLI (Recomendado)**
-```bash
-antigravity-account-switcher config set antigravity_bin /caminho/para/seu/antigravity
-```
-
-**Método 2: Variável de Ambiente**
-```bash
-export ANTIGRAVITY_BIN="/caminho/para/seu/antigravity"
-```
-
-**Método 3: Flag no momento da execução**
-```bash
-antigravity-account-switcher launch --bin /caminho/para/seu/antigravity
-```
-
----
-
-## Início Rápido (3 Passos)
-
-### 1. Compilar e Instalar o Switcher
-```bash
-git clone https://github.com/Muriel-Gasparini/antigravity-account-switcher.git
+```sh
+git clone https://github.com/koboshchan/antigravity-account-switcher.git
 cd antigravity-account-switcher
 make install
+export PATH="$HOME/.local/bin:$PATH"
+antigravity-account-switcher version
 ```
-*Compila um único binário estático (sem dependências CGO) e o instala em `~/.local/bin/antigravity-account-switcher`.*
 
-### 2. Cadastrar suas Contas
-Autentique uma ou mais contas do Google com fluxo OAuth seguro:
-```bash
+`make install` compila com `CGO_ENABLED=0` e instala em `~/.local/bin/antigravity-account-switcher`.
+
+Adicione contas pelo OAuth no navegador, repetindo para cada conta do pool.
+
+```sh
 antigravity-account-switcher add-account
-```
-*(Se você já possui o Antigravity 2.0 instalado e com login ativo, o switcher importa automaticamente sua conta no primeiro uso!)*
-
-### 3. Iniciar o Antigravity 2.0
-```bash
-antigravity-account-switcher launch
-```
-O switcher inicia o proxy em segundo plano, abre o Antigravity 2.0 com variáveis de ambiente isoladas e monitora a saúde das contas. Ao fechar o Antigravity 2.0, o switcher é encerrado automaticamente no mesmo instante.
-
----
-
-## Integração com o Desktop (GNOME / KDE / XFCE)
-
-Para abrir o Antigravity 2.0 diretamente do menu de aplicativos ou da barra de tarefas/dock do seu Linux:
-
-```bash
-antigravity-account-switcher install-desktop
-```
-Esse comando automaticamente:
-- Localiza o binário do Antigravity 2.0 na sua máquina.
-- Extrai e configura o ícone oficial da aplicação em `~/.local/share/icons/antigravity.png`.
-- Cria o arquivo de atalho `~/.local/share/applications/antigravity.desktop` apontando para `antigravity-account-switcher launch %F`.
-
-Para remover o atalho desktop a qualquer momento:
-```bash
-antigravity-account-switcher uninstall-desktop
+# Exibir a URL OAuth sem abrir o navegador automaticamente
+antigravity-account-switcher add-account --no-browser
 ```
 
----
+Na primeira inicialização com o pool vazio, credenciais ACP compatíveis podem ser importadas de `~/.gemini/antigravity-acp/acp_token.json` ou `~/.gemini/antigravity-cli/acp_token.json`. Não há comando geral de importação em lote do agy-swap.
 
-## Referência de Comandos da CLI
+## Uso
 
-A CLI disponibiliza comandos para supervisão, troca manual e configuração:
+Inicie uma nova sessão supervisionada do Antigravity.
 
-| Comando | Descrição |
-| :--- | :--- |
-| `launch` | **(Recomendado)** Inicia o Antigravity 2.0 sob a supervisão do proxy acoplado. |
-| `serve` | Inicia o proxy local, monitor de cotas em segundo plano e dashboard web como serviço. |
-| `wrap -- <comando>` | Executa qualquer comando arbitrário injetando o proxy apenas naquele processo. |
-| `add-account` | Inicia o fluxo OAuth2 loopback (RFC 8252) no navegador para cadastrar uma nova conta Google. |
-| `list-accounts` | Exibe todas as contas cadastradas, qual está ativa e as porcentagens de cota. |
-| `refresh-quotas` | Força a sincronização imediata de cotas com o Google para todas as contas. |
-| `status` | Mostra a conta ativa no momento, métricas de tokens e saúde do switcher. |
-| `config` | Consulta ou atualiza configurações persistentes (`get`, `set`, `list`). |
-| `install-desktop` | Cria o atalho `.desktop` no menu do GNOME/XDG com o ícone oficial. |
-| `uninstall-desktop`| Remove o atalho `.desktop` do menu do sistema. |
-| `version` | Exibe a versão compilada, hash do commit e data de build. |
+```sh
+antigravity-account-switcher launch --open
+# Informar o executável manualmente
+antigravity-account-switcher launch --bin /path/to/antigravity
+```
 
-### Flags Úteis
+Para a CLI, use o executável real, não um wrapper de troca de contas. O caminho abaixo é apenas um exemplo; ajuste conforme sua instalação.
 
-- **Abrir o Dashboard Web no Navegador ao Iniciar:**
-  ```bash
-  antigravity-account-switcher launch --open
-  ```
-- **Adicionar Conta em Servidor Remoto / Sem Navegador (SSH / Headless):**
-  ```bash
-  antigravity-account-switcher add-account --no-browser
-  ```
-- **Especificar Porta Customizada:**
-  ```bash
-  antigravity-account-switcher launch --port 1831
-  ```
-- **Fallback Multi-Modelo no Momento da Execução:**
-  ```bash
-  antigravity-account-switcher launch --fallback-secondary --model-primary gemini-2.5-pro --model-secondary claude-3-7-sonnet
-  ```
-- **Modo Privacidade no Dashboard Web:**
-  Clique no botão **Privacidade** no cabeçalho do painel ou pressione <kbd>P</kbd> para borrar visualmente e ofuscar todos os e-mails das contas Google (cards de contas, rota ativa e logs de eventos em tempo real), permitindo capturas de tela e transmissões sem vazamento de dados pessoais.
+```sh
+antigravity-account-switcher wrap -- ~/.local/libexec/agy
+```
 
----
+Execute apenas o proxy e o painel, sem iniciar o Antigravity.
 
-## Fallback Multi-Modelo & Auto-Recuperação
+```sh
+antigravity-account-switcher serve --port 8080
+```
 
-O switcher conta com um sistema inteligente de contingência multi-modelo para evitar interrupções no fluxo de desenvolvimento:
+Abra `http://127.0.0.1:8080`. A porta padrão é 8080, salvo configuração diferente. Escolha uma porta livre se outro supervisor estiver em execução. O comando `serve` sozinho não se conecta a um agente existente nem o reconfigura.
 
-### 1. Fallback Intra-Conta de Modelos
-Quando a cota do modelo principal se esgota (ex.: `gemini-2.5-pro` ou `claude-3-7-sonnet`), o switcher pode recorrer automaticamente a um modelo secundário mais leve (como `gemini-2.5-flash` ou `claude-3-5-sonnet`) na **mesma conta** antes de alternar para a próxima conta do pool.
-- Suporta tanto fallback **entre famílias** (`claude-3-7-sonnet` -> `gemini-2.5-flash`) quanto **dentro da mesma família** (`gemini-2.5-pro` -> `gemini-2.5-flash`, que possuem limites de cota independentes no Google Cloud Code PA).
-- Conta com **otimização preditiva**: se a telemetria indicar 0% de cota restante no modelo primário, as requisições são redirecionadas proativamente sem a penalidade de latência de esperar por um erro HTTP 429.
-- Assim que o monitor em segundo plano detecta a restauração da cota primária, as requisições voltam automaticamente ao modelo principal configurado.
+Consulte o pool ou sincronize cotas sem iniciar um agente.
 
-### 2. Configuração pelo Dashboard Web
-Você pode gerenciar as preferências de modelos diretamente pelo navegador (`http://127.0.0.1:8080` ou `launch --open`):
-- **Toggle em Tempo Real**: Ative ou desative o fallback intra-conta instantaneamente.
-- **Descoberta de Modelos**: Clique em **Buscar Modelos** para inspecionar os endpoints do `language_server` / Cloud Code PA e listar todos os modelos disponíveis.
-- **Recarregamento Sem Reiniciar**: Ao salvar as configurações, o `config.json` é atualizado e o motor de proxy aplica as mudanças imediatamente sem necessidade de reiniciar o Antigravity 2.0 ou o daemon.
-
-### 3. Recuperação Automática de Assinatura de Pensamento (HTTP 400)
-Ao alternar entre provedores de modelos (ex.: Claude <-> Gemini) ou em sessões de múltiplos turnos, o Google Cloud Code PA valida blocos criptográficos HMAC de raciocínio (`thought_signature` ou blocos de `thinking` do Claude). Assinaturas incompatíveis ou corrompidas causam erro `HTTP 400 ("Corrupted thought signature" ou "Invalid signature in thinking block")`.
-
-**O switcher recupera esse erro automaticamente em tempo real:**
-- O proxy intercepta a resposta HTTP 400 antes que ela chegue ao cliente.
-- Aplica sanitização transparente no payload (injetando `skip_thought_signature_validator` ou limpando blocos de HMAC incompatíveis) preservando todo o histórico de conversação do usuário.
-- Reenvia a requisição imediatamente em memória para o Google Cloud Code PA, garantindo que o agente continue pensando sem travar o editor ou interromper a sessão de código.
-
----
-
-## Referência de Configuração
-
-As configurações ficam salvas em formato JSON em `~/.config/antigravity-account-switcher/config.json`.
-
-```bash
-# Ver todas as configurações atuais
+```sh
+antigravity-account-switcher list-accounts
+antigravity-account-switcher refresh-quotas
+antigravity-account-switcher status
 antigravity-account-switcher config list
-
-# Definir caminho do executável do Antigravity 2.0
-antigravity-account-switcher config set antigravity_bin ~/.local/share/antigravity/antigravity
-
-# Definir porta padrão do dashboard web
-antigravity-account-switcher config set port 1831
-
-# Ajustar intervalo de checagem de cotas em segundo plano
-antigravity-account-switcher config set quota_interval 60s
-
-# Configurar modelos primário e secundário de contingência
-antigravity-account-switcher config set model_primary gemini-2.5-pro
-antigravity-account-switcher config set model_secondary claude-3-7-sonnet
-
-# Habilitar o fallback intra-conta antes de alternar de conta
-antigravity-account-switcher config set fallback_secondary_enabled true
+antigravity-account-switcher config set antigravity_bin /path/to/antigravity
 ```
 
-### Variáveis de Ambiente
+Habilite o fallback de modelos explicitamente. O modelo primário serve de referência para o fallback, não substitui IDs recebidos nas requisições. Primário e secundário devem ser diferentes, mas podem pertencer ao mesmo provedor.
 
-| Variável | Descrição |
-| :--- | :--- |
-| `ANTIGRAVITY_BIN` | Caminho explícito para o executável do Antigravity 2.0. |
-| `ANTIGRAVITY_PORT` | Sobrescreve a porta do proxy e dashboard. |
-| `ANTIGRAVITY_DB_PATH` | Caminho para o banco de dados SQLite (padrão: `~/.config/.../accounts.db`). |
-| `ANTIGRAVITY_CLIENT_ID` | Sobrescrita opcional do Client ID do Google Cloud Console. |
-| `ANTIGRAVITY_CLIENT_SECRET` | Sobrescrita opcional do Client Secret do Google Cloud Console. |
-| `ANTIGRAVITY_MODEL_PRIMARY` | Sobrescreve o modelo primário configurado. |
-| `ANTIGRAVITY_MODEL_SECONDARY` | Sobrescreve o modelo secundário de contingência. |
-| `ANTIGRAVITY_FALLBACK_SECONDARY_ENABLED` | Habilita/desabilita o fallback intra-conta (`true`/`false`). |
-
----
-
-## Arquitetura
-
-```text
-               +-----------------------------------+
-               |          Antigravity 2.0          |
-               |    (Processo Filho via Supervisor)|
-               +-----------------+-----------------+
-                                 | HTTP_PROXY / CLOUD_CODE_URL
-                                 v
-+------------------------------------------------------------------+
-|              ANTIGRAVITY ACCOUNT SWITCHER (Binário Único)        |
-|                                                                  |
-|   +--------------------+     +-------------------------------+   |
-|   |   Dashboard Web    |     |     Proxy Reverso em Processo |   |
-|   |  (HTML5/Tailwind)  |     | * Bearer Token Dinâmico       |   |
-|   |  http://127.0.0.1  |     | * Buffer de Replay de 100MB   |   |
-|   +---------+----------+     | * Túnel RFC 7231 CONNECT      |   |
-|             |                +---------------+---------------+   |
-|             v                                |                   |
-|   +--------------------+         HTTP 429    | Tokens SSE        |
-|   | Banco SQLite WAL   |<--------------------+                   |
-|   | * accounts.db      |                     v                   |
-|   | * métricas tokens  |     +-------------------------------+   |
-|   +---------+----------+     | Daemon de Monitor de Cotas    |   |
-|             ^                | * Auto-restaura após o reset  |   |
-|             +----------------+ * User-Agent oficial Google PA|   |
-+----------------------------------------------+-------------------+
-                                               |
-                                               v
-                              +--------------------------------+
-                              | Infraestrutura Google CloudCode|
-                              +--------------------------------+
+```sh
+antigravity-account-switcher wrap --fallback-secondary \
+  --model-primary gemini-3.8-flash-high \
+  --model-secondary claude-sonnet-5-5 -- ~/.local/libexec/agy
 ```
 
----
+Use IDs disponíveis para sua conta. Consulte `antigravity-account-switcher help` ou `--help` de cada comando. A configuração usa `config list`, `config get <key>` e `config set <key> <value>`.
 
-## Solução de Problemas & Perguntas Frequentes (FAQ)
+## Armazenamento e segurança
 
-#### 1. "Could not automatically locate Antigravity binary"
-Se a sua instalação do Antigravity 2.0 estiver em um diretório personalizado que não foi detectado automaticamente, aponte para o executável:
-```bash
-antigravity-account-switcher config set antigravity_bin /caminho/para/antigravity
+O diretório padrão é `~/.config/antigravity-account-switcher/`, com `config.json` e `accounts.db`. Use `ANTIGRAVITY_CONFIG_DIR`, `ANTIGRAVITY_DB_PATH` ou a opção `--db` dos comandos compatíveis para selecionar outro armazenamento.
+
+O banco SQLite contém credenciais OAuth. Mantenha-o privado; não publique bancos, tokens ou configurações com credenciais. Mantenha o painel restrito a localhost e use um túnel SSH para acesso remoto.
+
+`launch` e `wrap` supervisionam o ciclo de vida do processo filho. Encerrar o supervisor pode encerrar esse processo. Não reinicie um supervisor durante um trabalho demorado apenas para atualizar o binário ou o painel.
+
+## Contribuições
+
+Abra uma [issue](https://github.com/koboshchan/antigravity-account-switcher/issues) ou envie um pull request com escopo definido para este fork. Leia [AGENTS.md](AGENTS.md) antes de alterar código.
+
+```sh
+make fmt
+make lint
+make test-race
+make build-static
 ```
 
-#### 2. Isso interfere na digitação por voz (Speech-to-Text) do Antigravity?
-Não. O switcher define automaticamente `NO_PROXY=speech.googleapis.com` e implementa tunelamento TCP bruto via RFC 7231 em conexões `CONNECT`, garantindo latência zero e funcionamento perfeito do áudio.
+Os testes com detector de condições de corrida exigem um compilador C; os binários de distribuição não.
 
-#### 3. Onde ficam guardados meus tokens e credenciais?
-Os tokens ficam armazenados exclusivamente no seu disco local, no banco SQLite protegido em `~/.config/antigravity-account-switcher/accounts.db`. Nenhuma informação, token ou métrica jamais sai da sua máquina.
+## Licença e créditos
 
-#### 4. Como faço para desinstalar completamente e apagar todos os dados?
-```bash
-# 1. Remove o atalho do menu desktop
-antigravity-account-switcher uninstall-desktop
+Distribuído sob a [licença MIT](LICENSE). A licença original e o aviso de direitos autorais de Muriel Gasparini são preservados sem alterações.
 
-# 2. Remove o binário
-make uninstall
+Implementação original de [Muriel Gasparini](https://github.com/Muriel-Gasparini/antigravity-account-switcher). Fork mantido em [koboshchan/antigravity-account-switcher](https://github.com/koboshchan/antigravity-account-switcher).
 
-# 3. Exclui a pasta de configurações e o banco de dados
-rm -rf ~/.config/antigravity-account-switcher
-```
+Estrutura do README adaptada de [othneildrew/Best-README-Template](https://github.com/othneildrew/Best-README-Template/blob/master/BLANK_README.md). A licença MIT do template está disponível [aqui](https://github.com/othneildrew/Best-README-Template/blob/master/LICENSE.txt).
 
-#### 5. A autoatualização nativa ("Check for Updates") funciona?
-Sim! No Linux, o Antigravity 2.0 utiliza o mecanismo `AppImageUpdater` do Electron. Ao rodar o Antigravity a partir do arquivo `.tar.gz` descompactado sem um runtime de AppImage, a opção `Help -> Check for Updates` costuma falhar com `ERR_UPDATER_OLD_FILE_NOT_FOUND` pela ausência da variável de ambiente `APPIMAGE`.
-
-**O Antigravity Account Switcher corrige isso de fábrica.** Ao iniciar via `antigravity-account-switcher launch` (ou pelo atalho desktop criado por `install-desktop`), o supervisor injeta automaticamente a variável `APPIMAGE` apontando para o binário correto no processo do Antigravity 2.0, permitindo que a verificação de atualizações e a atualização automática funcionem perfeitamente.
-
----
-
-## Segurança
-
-Consulte [SECURITY.md](SECURITY.md) para detalhes sobre políticas de reporte de vulnerabilidades e conformidade com a especificação RFC 8252 §8.5 para clientes OAuth 2.0 públicos.
-
----
-
-## Como Contribuir
-
-Contribuições são muito bem-vindas! Consulte o arquivo [CONTRIBUTING.md](CONTRIBUTING.md) para instruções de ambiente de desenvolvimento, execução dos testes com detector de race e padrões de Pull Request.
-
----
-
-## Licença
-
-Distribuído sob a licença MIT © 2026 Muriel Gasparini. Veja [LICENSE](LICENSE) para mais detalhes.
+<p align="right"><a href="#readme-top">Voltar ao início</a></p>

@@ -400,8 +400,8 @@ func TestCLI_SubprocessBinaryExecution(t *testing.T) {
 
 		outputStr := string(out)
 		expectedKeys := []string{
-			"model_primary:              gemini-2.5-pro",
-			"model_secondary:            claude-3-5-sonnet",
+			"model_primary:              gemini-3.8-flash-high",
+			"model_secondary:            claude-sonnet-5-5",
 			"fallback_secondary_enabled: false",
 		}
 		for _, ek := range expectedKeys {

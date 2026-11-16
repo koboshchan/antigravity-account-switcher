@@ -81,10 +81,10 @@ func TestCLI_ModelInvariantsUnderConfigSet(t *testing.T) {
 		t.Fatalf("expected 0, got %d: %s", code, stderr.String())
 	}
 
-	// Step 2: Attempt to set model_secondary identical to default primary (gemini-2.5-pro)
+	// Step 2: Attempt to set model_secondary identical to default primary (gemini-3.8-flash-high)
 	stdout.Reset()
 	stderr.Reset()
-	code = executeConfig([]string{"set", "model_secondary", "gemini-2.5-pro"}, &stdout, &stderr)
+	code = executeConfig([]string{"set", "model_secondary", "gemini-3.8-flash-high"}, &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("expected exit code 0 (warning) when setting identical secondary model, got %d", code)
 	}
@@ -95,7 +95,7 @@ func TestCLI_ModelInvariantsUnderConfigSet(t *testing.T) {
 	// Step 3: Attempt to set case-insensitively identical model_secondary
 	stdout.Reset()
 	stderr.Reset()
-	code = executeConfig([]string{"set", "model_secondary", "GEMINI-2.5-PRO"}, &stdout, &stderr)
+	code = executeConfig([]string{"set", "model_secondary", "GEMINI-3.8-FLASH-HIGH"}, &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("expected exit code 0 (warning) when setting case-insensitive identical secondary model, got %d", code)
 	}
@@ -103,7 +103,7 @@ func TestCLI_ModelInvariantsUnderConfigSet(t *testing.T) {
 	// Step 4: Attempt to set model_primary identical to secondary
 	stdout.Reset()
 	stderr.Reset()
-	code = executeConfig([]string{"set", "model_primary", "claude-3-5-sonnet"}, &stdout, &stderr)
+	code = executeConfig([]string{"set", "model_primary", "claude-sonnet-5-5"}, &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("expected exit code 0 (warning) when setting identical primary model, got %d", code)
 	}
@@ -118,7 +118,7 @@ func TestCLI_ModelInvariantsUnderConfigSet(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = executeConfig([]string{"set", "model_secondary", "gemini-2.5-pro"}, &stdout, &stderr)
+	code = executeConfig([]string{"set", "model_secondary", "gemini-3.8-flash-high"}, &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("expected 0 when fallback disabled, got %d: %s", code, stderr.String())
 	}
@@ -137,8 +137,8 @@ func TestCLI_SubcommandFlags_ValidationErrors(t *testing.T) {
 
 			args := []string{
 				"--fallback-secondary=true",
-				"--model-primary=gemini-2.5-pro",
-				"--model-secondary=gemini-2.5-pro",
+				"--model-primary=gemini-3.8-flash-high",
+				"--model-secondary=gemini-3.8-flash-high",
 			}
 
 			if err := fs.Parse(args); err != nil {

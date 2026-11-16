@@ -25,7 +25,7 @@ const (
 	// eventTypeModelFallback is the domain telemetry event type for intra-account model fallback (Feature 4).
 	eventTypeModelFallback = domain.EventType("model_fallback")
 
-	defaultPrimaryModel   = "gemini-2.5-pro"
+	defaultPrimaryModel   = "gemini-3.8-flash-high"
 	defaultSecondaryModel = "claude-3-5-sonnet"
 )
 
@@ -151,8 +151,8 @@ func TestTier1_F1_ConfigSchemaAndValidation(t *testing.T) {
 		if !strings.Contains(out, "model_primary") || !strings.Contains(out, defaultPrimaryModel) {
 			t.Errorf("expected default model_primary '%s' in output: %s", defaultPrimaryModel, out)
 		}
-		if !strings.Contains(out, "model_secondary") || !strings.Contains(out, "claude-3-5-sonnet") {
-			t.Errorf("expected default model_secondary 'claude-3-5-sonnet' in output: %s", out)
+		if !strings.Contains(out, "model_secondary") || !strings.Contains(out, "claude-sonnet-5-5") {
+			t.Errorf("expected default model_secondary 'claude-sonnet-5-5' in output: %s", out)
 		}
 		if !strings.Contains(out, "fallback_secondary_enabled") || !strings.Contains(out, "false") {
 			t.Errorf("expected default fallback_secondary_enabled false in output: %s", out)

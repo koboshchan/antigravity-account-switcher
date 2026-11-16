@@ -103,3 +103,21 @@ func TestDoLSRequest_MockServer(t *testing.T) {
 		t.Errorf("expected status ok, got %v", res["status"])
 	}
 }
+
+func TestCurrentOfflineCatalogHasNoRetiredDefaults(t *testing.T) {
+	seen := map[string]bool{}
+	for _, model := range DefaultModelCatalog() {
+		if seen[model.ID] {
+			t.Fatalf("duplicate %s", model.ID)
+		}
+		seen[model.ID] = true
+		if model.ID == "gemini-2.5-pro" || model.ID == "claude-3-5-sonnet" {
+			t.Errorf("retired model %s is still a default suggestion", model.ID)
+		}
+	}
+	for _, id := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-4-argon", "gemini-4-hydrogen-high", "gemini-4-helium", "orchestrator"} {
+		if !seen[id] {
+			t.Errorf("missing current suggestion %s", id)
+		}
+	}
+}

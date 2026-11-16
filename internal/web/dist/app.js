@@ -10,8 +10,8 @@
   let rawAccountsData = [];
   let rawModelsData = [];
   let currentAppConfig = {
-    model_primary: 'gemini-2.5-pro',
-    model_secondary: 'gemini-2.5-flash',
+    model_primary: 'gemini-3.8-flash-high',
+    model_secondary: 'claude-sonnet-5-5',
     fallback_secondary_enabled: false
   };
   let allEvents = [];
@@ -478,7 +478,7 @@
       quotaBodyHtml = `
         <div class="quota-group" style="text-align: center; padding: 0.75rem 0.5rem;">
           <div class="text-xs text-muted">Awaiting quota poll from Google Cloud Code PA...</div>
-          <div class="text-xs text-secondary mt-1">Automatic sync occurs every 60s</div>
+          <div class="text-xs text-secondary mt-1">Quotas refresh automatically</div>
         </div>
       `;
     } else {
@@ -648,6 +648,40 @@
   // Model Fallback Configuration & Dynamic Discovery
   // =========================================================================
 
+  const CUSTOM_VALUE = '__custom__';
+  const modelDirty = { primary: false, secondary: false };
+  const customInputs = {
+    primary: document.getElementById('custom-model-primary'),
+    secondary: document.getElementById('custom-model-secondary')
+  };
+  const modelsNoticeText = document.getElementById('models-notice-text');
+
+  function selectFor(kind) { return kind === 'primary' ? selectModelPrimary : selectModelSecondary; }
+
+  function readModelValue(kind) {
+    const sel = selectFor(kind);
+    if (!sel) return '';
+    if (sel.value === CUSTOM_VALUE) return (customInputs[kind].value || '').trim();
+    return sel.value;
+  }
+
+  function updateDirtyMessage() {
+    let modelDirtyMsg = document.getElementById('model-dirty-msg');
+    if (!modelDirtyMsg && configStatusMsg && (modelDirty.primary || modelDirty.secondary)) {
+      configStatusMsg.innerHTML = '<span id="model-dirty-msg" class="model-dirty"></span>';
+      modelDirtyMsg = document.getElementById('model-dirty-msg');
+    }
+    if (!modelDirtyMsg) return;
+    modelDirtyMsg.textContent = (modelDirty.primary || modelDirty.secondary) ? 'Unsaved changes' : '';
+  }
+
+  function syncCustomVisibility(kind) {
+    const sel = selectFor(kind);
+    const input = customInputs[kind];
+    if (!sel || !input) return;
+    input.hidden = sel.value !== CUSTOM_VALUE;
+  }
+
   async function fetchConfig() {
     try {
       const res = await fetch('/api/config');
@@ -659,12 +693,9 @@
         fallbackToggle.checked = Boolean(data.fallback_secondary_enabled);
         updateToggleStatusText(Boolean(data.fallback_secondary_enabled));
       }
-      if (selectModelPrimary && data.model_primary) {
-        selectModelPrimary.value = data.model_primary;
-      }
-      if (selectModelSecondary && data.model_secondary) {
-        selectModelSecondary.value = data.model_secondary;
-      }
+      // Never overwrite values the user has changed but not saved yet.
+      renderModelSelect('primary');
+      renderModelSelect('secondary');
     } catch (err) {
       console.warn('Failed to fetch config:', err);
     }
@@ -672,12 +703,41 @@
 
   function updateToggleStatusText(isEnabled) {
     if (!fallbackToggleStatus) return;
+    if (fallbackToggle) fallbackToggle.setAttribute('aria-checked', String(Boolean(isEnabled)));
     if (isEnabled) {
       fallbackToggleStatus.textContent = 'Enabled';
       fallbackToggleStatus.className = 'toggle-label-text is-enabled';
     } else {
       fallbackToggleStatus.textContent = 'Disabled';
       fallbackToggleStatus.className = 'toggle-label-text';
+    }
+  }
+
+  function setModelsBadge(source) {
+    if (!modelsSourceBadge) return;
+    if (source === 'cloud_code_pa') {
+      modelsSourceBadge.textContent = 'Google (Live)';
+      modelsSourceBadge.className = 'badge badge-success mono';
+      modelsSourceBadge.title = 'Fetched live from Google Cloud Code PA for the active account';
+    } else if (source === 'language_server') {
+      modelsSourceBadge.textContent = 'Antigravity IDE (Live)';
+      modelsSourceBadge.className = 'badge badge-success mono';
+      modelsSourceBadge.title = 'Discovered from the running language_server';
+    } else if (source === 'quota_buckets') {
+      modelsSourceBadge.textContent = 'Quota Buckets';
+      modelsSourceBadge.className = 'badge badge-info mono';
+      modelsSourceBadge.title = 'Derived from account quota buckets';
+    } else {
+      modelsSourceBadge.textContent = 'Fallback catalog (unverified)';
+      modelsSourceBadge.className = 'badge badge-warning mono';
+      modelsSourceBadge.title = 'Could not reach Google or the IDE. This is a built-in list and may be out of date.';
+    }
+    if (modelsNoticeText) {
+      const unverified = !(source === 'cloud_code_pa' || source === 'language_server' || source === 'quota_buckets');
+      modelsNoticeText.innerHTML = '<strong>' + (unverified ? 'Unverified fallback list.' : 'Availability depends on Google and your account.') + '</strong> ' +
+        (unverified
+          ? 'No live catalog was reachable, so these entries may be stale. Preview models such as Argon or Helium are not guaranteed to be enabled for your account.'
+          : 'Listed models, including preview entries such as Argon or Helium, are not guaranteed to be enabled for every account.');
     }
   }
 
@@ -689,31 +749,18 @@
 
     try {
       const res = await fetch('/api/models');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       rawModelsData = Array.isArray(data.models) ? data.models : [];
-
-      if (modelsSourceBadge) {
-        if (data.source === 'language_server') {
-          modelsSourceBadge.textContent = 'Antigravity IDE (Live)';
-          modelsSourceBadge.className = 'badge badge-success mono';
-          modelsSourceBadge.title = 'Discovered dynamically from running language_server';
-        } else if (data.source === 'quota_buckets') {
-          modelsSourceBadge.textContent = 'Quota Buckets';
-          modelsSourceBadge.className = 'badge badge-info mono';
-        } else {
-          modelsSourceBadge.textContent = 'Standard Catalog';
-          modelsSourceBadge.className = 'badge badge-neutral mono';
-        }
-      }
-
+      setModelsBadge(data.source);
       populateModelSelects();
     } catch (err) {
       console.warn('Failed to fetch models:', err);
       if (modelsSourceBadge) {
-        modelsSourceBadge.textContent = 'Catalog (Offline)';
+        modelsSourceBadge.textContent = 'Models unavailable';
         modelsSourceBadge.className = 'badge badge-warning mono';
       }
+      populateModelSelects();
     } finally {
       setTimeout(() => {
         if (refreshModelsIcon) {
@@ -734,123 +781,86 @@
     return 'gemini';
   }
 
-  function updateSecondaryOptions() {
-    if (!selectModelPrimary || !selectModelSecondary) return;
-    const primaryVal = selectModelPrimary.value;
-    const primaryCat = getModelCategory(primaryVal);
-    const prevSecondary = selectModelSecondary.value || currentAppConfig.model_secondary;
+  function optionHtml(m, selectedVal) {
+    const sel = m.id === selectedVal ? ' selected' : '';
+    const star = m.recommended ? ' ★' : '';
+    return '<option value="' + escapeHtml(m.id) + '"' + sel + '>' + escapeHtml(m.display_name || m.id) + star + '</option>';
+  }
 
-    const allowedModels = rawModelsData.filter(m => {
-      const cat = m.category || getModelCategory(m.id);
-      return cat !== primaryCat;
-    });
+  // Rebuild one select. Keeps the user's unsaved choice, else the saved config value.
+  function renderModelSelect(kind) {
+    const sel = selectFor(kind);
+    if (!sel) return;
+    const input = customInputs[kind];
+    const configKey = kind === 'primary' ? 'model_primary' : 'model_secondary';
 
-    let html = '';
-    const label = primaryCat === 'gemini' ? 'Claude & GPT (Standby Fallback)' : 'Google Gemini (Standby Fallback)';
-    html += `<optgroup label="${label}">`;
-    allowedModels.forEach(m => {
-      const isSelected = m.id === prevSecondary ? 'selected' : '';
-      const star = m.recommended ? ' ★' : '';
-      html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-    });
-    html += '</optgroup>';
-
-    selectModelSecondary.innerHTML = html;
-
-    // Validate if previously selected model is still in the new option list
-    const stillValid = Array.from(selectModelSecondary.options).some(opt => opt.value === prevSecondary);
-    if (!stillValid && selectModelSecondary.options.length > 0) {
-      selectModelSecondary.selectedIndex = 0;
+    let wanted;
+    let wantCustom = false;
+    if (modelDirty[kind]) {
+      wantCustom = sel.value === CUSTOM_VALUE;
+      wanted = wantCustom ? CUSTOM_VALUE : sel.value;
+    } else {
+      wanted = currentAppConfig[configKey] || '';
     }
+
+    if (rawModelsData.length === 0 && !wanted) {
+      sel.innerHTML = '<option value="">Loading models…</option>';
+      return;
+    }
+
+    const groups = [
+      ['Google Gemini', m => m.category === 'gemini'],
+      ['Claude & GPT (3P)', m => m.category === 'claude_gpt'],
+      ['Other Models', m => m.category !== 'gemini' && m.category !== 'claude_gpt']
+    ];
+    let html = '';
+    groups.forEach(([label, test]) => {
+      const items = rawModelsData.filter(test);
+      if (items.length) html += '<optgroup label="' + label + '">' + items.map(m => optionHtml(m, wanted)).join('') + '</optgroup>';
+    });
+
+    // Preserve a configured / typed value that is not in the live list.
+    const known = wanted === CUSTOM_VALUE || rawModelsData.some(m => m.id === wanted);
+    if (wanted && !known) {
+      html = '<optgroup label="Configured"><option value="' + escapeHtml(wanted) + '" selected>' + escapeHtml(wanted) + ' (configured, not in list)</option></optgroup>' + html;
+    }
+    html += '<optgroup label="Other"><option value="' + CUSTOM_VALUE + '"' + (wanted === CUSTOM_VALUE ? ' selected' : '') + '>Custom model ID…</option></optgroup>';
+
+    const typed = input ? input.value : '';
+    sel.innerHTML = html;
+    if (wanted) sel.value = wanted;
+    if (input) input.value = typed;
+    syncCustomVisibility(kind);
   }
 
   function populateModelSelects() {
-    if (!selectModelPrimary || !selectModelSecondary) return;
+    renderModelSelect('primary');
+    renderModelSelect('secondary');
+    updateDirtyMessage();
+  }
 
-    const currentPrimary = currentAppConfig.model_primary || selectModelPrimary.value;
-    const currentSecondary = currentAppConfig.model_secondary || selectModelSecondary.value;
-
-    const geminiModels = [];
-    const claudeGptModels = [];
-    const otherModels = [];
-
-    rawModelsData.forEach(m => {
-      if (m.category === 'gemini') {
-        geminiModels.push(m);
-      } else if (m.category === 'claude_gpt') {
-        claudeGptModels.push(m);
-      } else {
-        otherModels.push(m);
-      }
-    });
-
-    function buildOptionsHtml(selectedVal) {
-      let html = '';
-
-      if (geminiModels.length > 0) {
-        html += '<optgroup label="Google Gemini">';
-        geminiModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      if (claudeGptModels.length > 0) {
-        html += '<optgroup label="Claude & GPT (3P)">';
-        claudeGptModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          const star = m.recommended ? ' ★' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}${star}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      if (otherModels.length > 0) {
-        html += '<optgroup label="Other Models">';
-        otherModels.forEach(m => {
-          const isSelected = m.id === selectedVal ? 'selected' : '';
-          html += `<option value="${escapeHtml(m.id)}" ${isSelected}>${escapeHtml(m.display_name || m.id)}</option>`;
-        });
-        html += '</optgroup>';
-      }
-
-      return html;
-    }
-
-    selectModelPrimary.innerHTML = buildOptionsHtml(currentPrimary);
-
-    // If current selection wasn't in list, add explicit option
-    if (currentPrimary && !selectModelPrimary.value) {
-      const opt = new Option(currentPrimary, currentPrimary, true, true);
-      selectModelPrimary.add(opt);
-    }
-
-    // Populate secondary options strictly scoped to cross-vendor models
-    updateSecondaryOptions();
-
-    if (currentSecondary && !selectModelSecondary.value) {
-      const opt = new Option(currentSecondary, currentSecondary, true, true);
-      selectModelSecondary.add(opt);
-    }
+  function onModelChange(kind) {
+    modelDirty[kind] = true;
+    syncCustomVisibility(kind);
+    if (selectFor(kind).value === CUSTOM_VALUE && customInputs[kind]) customInputs[kind].focus();
+    updateDirtyMessage();
   }
 
   async function handleSaveConfig() {
     if (!btnSaveConfig) return;
 
-    const primaryVal = selectModelPrimary ? selectModelPrimary.value : currentAppConfig.model_primary;
-    const secondaryVal = selectModelSecondary ? selectModelSecondary.value : currentAppConfig.model_secondary;
+    const primaryVal = readModelValue('primary');
+    const secondaryVal = readModelValue('secondary');
     const isFallbackEnabled = fallbackToggle ? fallbackToggle.checked : false;
 
-    // Client-side cross-vendor validation
-    if (isFallbackEnabled && primaryVal && secondaryVal) {
-      const pCat = getModelCategory(primaryVal);
-      const sCat = getModelCategory(secondaryVal);
-      if (pCat === sCat) {
-        showToast('Primary and Secondary models cannot be from the same provider. Choose Gemini ↔ Claude/GPT.', 'error', 5000);
-        return;
-      }
+    if (!primaryVal || !secondaryVal) {
+      showToast('Choose a model for both slots, or enter a custom model ID.', 'error', 4500);
+      return;
+    }
+    // Same family is fine; only identical IDs are rejected.
+    if (primaryVal.toLowerCase() === secondaryVal.toLowerCase()) {
+      showToast('Primary and secondary must be different model IDs.', 'error', 4500);
+      return;
     }
 
     const origText = btnSaveConfig.textContent;
@@ -872,23 +882,58 @@
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `HTTP ${res.status}`);
+        throw new Error((errData && errData.error && errData.error.message) || ('HTTP ' + res.status));
       }
 
       const updated = await res.json();
       currentAppConfig = updated;
+      modelDirty.primary = false;
+      modelDirty.secondary = false;
+      Object.values(customInputs).forEach(i => { if (i) i.value = ''; });
+      populateModelSelects();
       showToast('Model fallback configuration saved successfully', 'success', 3000);
       if (configStatusMsg) {
-        configStatusMsg.textContent = `Saved at ${new Date().toLocaleTimeString()}`;
+        configStatusMsg.textContent = 'Saved at ' + new Date().toLocaleTimeString();
         setTimeout(() => {
-          if (configStatusMsg) configStatusMsg.textContent = '';
+          if (configStatusMsg) configStatusMsg.innerHTML = '<span id="model-dirty-msg" class="model-dirty"></span>';
+          updateDirtyMessage();
         }, 4000);
       }
     } catch (err) {
-      showToast(`Failed to save settings: ${err.message}`, 'error', 5000);
+      showToast('Failed to save settings: ' + err.message, 'error', 5000);
     } finally {
       btnSaveConfig.disabled = false;
       btnSaveConfig.textContent = origText;
+    }
+  }
+
+  // Theme (light / dark), persisted
+  const THEME_KEY = 'antigravity_theme';
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    const btn = document.getElementById('btn-theme');
+    if (!btn) return;
+    const next = theme === 'dark' ? 'light' : 'dark';
+    btn.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+    btn.setAttribute('aria-label', 'Switch to ' + next + ' theme');
+    btn.title = 'Switch to ' + next + ' theme';
+    const txt = document.getElementById('theme-btn-text');
+    if (txt) txt.textContent = next === 'dark' ? 'Dark' : 'Light';
+  }
+  function initTheme() {
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+    const btn = document.getElementById('btn-theme');
+    if (btn) btn.addEventListener('click', () => {
+      const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+      applyTheme(next);
+    });
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+        let stored = null;
+        try { stored = localStorage.getItem(THEME_KEY); } catch (x) {}
+        if (stored !== 'light' && stored !== 'dark') applyTheme(e.matches ? 'dark' : 'light');
+      });
     }
   }
 
@@ -1431,8 +1476,15 @@
 
     // Dynamic secondary model options on primary model change
     if (selectModelPrimary) {
-      selectModelPrimary.addEventListener('change', updateSecondaryOptions);
+      selectModelPrimary.addEventListener('change', () => onModelChange('primary'));
     }
+
+    if (selectModelSecondary) {
+      selectModelSecondary.addEventListener('change', () => onModelChange('secondary'));
+    }
+    ['primary', 'secondary'].forEach(k => {
+      if (customInputs[k]) customInputs[k].addEventListener('input', () => { modelDirty[k] = true; updateDirtyMessage(); });
+    });
 
     // Save model fallback settings
     if (btnSaveConfig) {
@@ -1594,6 +1646,7 @@
 
   // Application initialization
   document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
     updatePrivacyUI();
     initListeners();
     fetchStatus();

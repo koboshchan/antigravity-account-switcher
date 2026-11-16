@@ -18,8 +18,8 @@ const (
 	DefaultInterval                 = "5m"
 	ConfigFileName                  = "config.json"
 	DefaultDBFileName               = "accounts.db"
-	DefaultModelPrimary             = "gemini-2.5-pro"
-	DefaultModelSecondary           = "claude-3-5-sonnet"
+	DefaultModelPrimary             = "gemini-3.8-flash-high"
+	DefaultModelSecondary           = "claude-sonnet-5-5"
 	DefaultFallbackSecondaryEnabled = false
 )
 

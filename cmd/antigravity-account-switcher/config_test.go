@@ -80,8 +80,8 @@ func TestCLI_Config_List(t *testing.T) {
 		"model_primary:",
 		"model_secondary:",
 		"fallback_secondary_enabled:",
-		"gemini-2.5-pro",
-		"claude-3-5-sonnet",
+		"gemini-3.8-flash-high",
+		"claude-sonnet-5-5",
 		"false",
 	}
 
@@ -322,7 +322,7 @@ func TestCLI_ExecuteConfig_Direct(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code = executeConfig([]string{"set", "model_secondary", "gemini-2.5-pro"}, &stdout, &stderr)
+	code = executeConfig([]string{"set", "model_secondary", "gemini-3.8-flash-high"}, &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("expected exit code 0 (warning) on identical model validation, got %d", code)
 	}
@@ -343,7 +343,7 @@ func TestCLI_SubcommandFlags_ServeLaunchWrap(t *testing.T) {
 			args := []string{
 				"--fallback-secondary=true",
 				"--model-primary=claude-3-7-sonnet",
-				"--model-secondary=gemini-2.5-pro",
+				"--model-secondary=gemini-3.8-flash-high",
 			}
 
 			if err := fs.Parse(args); err != nil {
@@ -356,8 +356,8 @@ func TestCLI_SubcommandFlags_ServeLaunchWrap(t *testing.T) {
 			if *modelPrimary != "claude-3-7-sonnet" {
 				t.Errorf("expected modelPrimary to be claude-3-7-sonnet, got: %s", *modelPrimary)
 			}
-			if *modelSecondary != "gemini-2.5-pro" {
-				t.Errorf("expected modelSecondary to be gemini-2.5-pro, got: %s", *modelSecondary)
+			if *modelSecondary != "gemini-3.8-flash-high" {
+				t.Errorf("expected modelSecondary to be gemini-3.8-flash-high, got: %s", *modelSecondary)
 			}
 		})
 	}

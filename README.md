@@ -33,6 +33,10 @@ The standalone `refresh-quotas` command now wires up the OAuth token refresher, 
 
 The proxy no longer replaces every requested model with the dashboard's primary model. Body, path, and query model IDs pass through, including Argon, Hydrogen, Helium, and future IDs. Regression tests cover these cases. This does not grant access to models absent from an account's Google catalog.
 
+The dashboard prefers Google's live model catalog, then the running IDE's list, with clearly marked offline suggestions for newer models. Configured and custom IDs remain selectable. New configurations default to Gemini 3.8 Flash High and Claude Sonnet 5.5; existing saved settings are preserved.
+
+The dashboard has system-font light and dark themes, a persistent theme switch, and a responsive frosted-card layout. No screenshots in this README use real account data.
+
 ## Getting started
 
 Use Linux or WSL with Git, Make, Go 1.24 or newer, and an existing Antigravity or `agy` installation.

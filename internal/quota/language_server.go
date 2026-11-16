@@ -423,20 +423,28 @@ func categorizeModelID(id string) string {
 	return "unknown"
 }
 
-// DefaultModelCatalog provides the standard catalog of Antigravity 2.0 models.
+// DefaultModelCatalog provides offline suggestions, not an entitlement list.
+// Google discovery remains authoritative. Experimental IDs may not be available.
 func DefaultModelCatalog() []*domain.ModelInfo {
 	return []*domain.ModelInfo{
 		{ID: "gemini-3.8-flash-high", DisplayName: "Gemini 3.8 Flash (High)", Category: "gemini", Recommended: true},
 		{ID: "gemini-3.8-flash-medium", DisplayName: "Gemini 3.8 Flash (Medium)", Category: "gemini", Recommended: true},
-		{ID: "gemini-3.7-flash-high", DisplayName: "Gemini 3.7 Flash (High)", Category: "gemini", Recommended: true},
-		{ID: "gemini-3.7-flash-medium", DisplayName: "Gemini 3.7 Flash (Medium)", Category: "gemini", Recommended: true},
-		{ID: "gemini-3.6-flash-medium", DisplayName: "Gemini 3.6 Flash (Medium)", Category: "gemini", Recommended: true},
-		{ID: "gemini-pro-agent", DisplayName: "Gemini 3.1 Pro (High)", Category: "gemini", Recommended: true},
-		{ID: "gemini-3.1-pro-low", DisplayName: "Gemini 3.1 Pro (Low)", Category: "gemini", Recommended: true},
-		{ID: "gemini-2.5-pro", DisplayName: "Gemini 2.5 Pro", Category: "gemini", Recommended: false},
-		{ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", Category: "gemini", Recommended: false},
-		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6 (Thinking)", Category: "claude_gpt", Recommended: true},
-		{ID: "claude-opus-4-6-thinking", DisplayName: "Claude Opus 4.6 (Thinking)", Category: "claude_gpt", Recommended: true},
-		{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B (Medium)", Category: "claude_gpt", Recommended: true},
+		{ID: "gemini-3.8-flash-low", DisplayName: "Gemini 3.8 Flash (Low)", Category: "gemini", Recommended: true},
+		{ID: "gemini-3.8-flash-minimal", DisplayName: "Gemini 3.8 Flash (Minimal)", Category: "gemini"},
+		{ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Category: "claude_gpt", Recommended: true},
+		{ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", Category: "claude_gpt", Recommended: true},
+		{ID: "gemini-4-argon", DisplayName: "Gemini 4 Argon", Category: "gemini"},
+		{ID: "gemini-4-argon-low", DisplayName: "Gemini 4 Argon (Low)", Category: "gemini"},
+		{ID: "gemini-4-argon-medium", DisplayName: "Gemini 4 Argon (Medium)", Category: "gemini"},
+		{ID: "gemini-4-argon-high", DisplayName: "Gemini 4 Argon (High)", Category: "gemini"},
+		{ID: "gemini-4-hydrogen", DisplayName: "Gemini 4 Hydrogen", Category: "gemini"},
+		{ID: "gemini-4-hydrogen-low", DisplayName: "Gemini 4 Hydrogen (Low)", Category: "gemini"},
+		{ID: "gemini-4-hydrogen-medium", DisplayName: "Gemini 4 Hydrogen (Medium)", Category: "gemini"},
+		{ID: "gemini-4-hydrogen-high", DisplayName: "Gemini 4 Hydrogen (High)", Category: "gemini"},
+		{ID: "gemini-4-hydrogen-xhigh", DisplayName: "Gemini 4 Hydrogen (Extra high)", Category: "gemini"},
+		{ID: "gemini-4-helium", DisplayName: "Gemini 4 Helium (Experimental ID)", Category: "gemini"},
+		{ID: "orchestrator", DisplayName: "Orchestrator", Category: "unknown"},
+		{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6 (Legacy)", Category: "claude_gpt"},
+		{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B (Medium)", Category: "claude_gpt"},
 	}
 }

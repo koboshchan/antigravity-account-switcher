@@ -752,12 +752,7 @@ func (a *APIHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, string) {
-	// 1. Try querying running language_server on localhost
-	if lsModels, err := quota.QueryAvailableModels(ctx); err == nil && len(lsModels) > 0 {
-		return a.ensureConfiguredModelsPresent(lsModels), "language_server"
-	}
-
-	// 2. Try querying Cloud Code PA directly if active account token exists
+	// Prefer Google's account-specific catalog over a potentially older IDE list.
 	if a.accountRepo != nil {
 		if activeAcc, err := a.accountRepo.GetActive(ctx); err == nil && activeAcc != nil && activeAcc.AccessToken != "" {
 			if ccModels, err := quota.FetchAvailableModelsFromCloudCode(ctx, activeAcc.AccessToken); err == nil && len(ccModels) > 0 {
@@ -765,16 +760,29 @@ func (a *APIHandler) discoverModels(ctx context.Context) ([]*domain.ModelInfo, s
 			}
 		}
 	}
-
-	// 3. Fallback to comprehensive Antigravity model catalog
+	if lsModels, err := quota.QueryAvailableModels(ctx); err == nil && len(lsModels) > 0 {
+		return a.ensureConfiguredModelsPresent(lsModels), "language_server"
+	}
 	return a.ensureConfiguredModelsPresent(quota.DefaultModelCatalog()), "catalog"
 }
 
 func (a *APIHandler) ensureConfiguredModelsPresent(models []*domain.ModelInfo) []*domain.ModelInfo {
+	// Keep experimental suggestions selectable without claiming Google returned them.
+	models = append([]*domain.ModelInfo(nil), models...)
 	seen := make(map[string]bool, len(models))
 	for _, m := range models {
 		if m != nil {
 			seen[m.ID] = true
+		}
+	}
+
+	for _, suggested := range quota.DefaultModelCatalog() {
+		if !seen[suggested.ID] {
+			copy := *suggested
+			copy.DisplayName += " · Suggested (not in live catalog)"
+			copy.Recommended = false
+			models = append(models, &copy)
+			seen[copy.ID] = true
 		}
 	}
 
@@ -790,7 +798,7 @@ func (a *APIHandler) ensureConfiguredModelsPresent(models []*domain.ModelInfo) [
 		models = append(models, &domain.ModelInfo{
 			ID:          primary,
 			DisplayName: primary,
-			Category:    "gemini",
+			Category:    modelCategory(primary),
 			Recommended: true,
 		})
 		seen[primary] = true
@@ -799,10 +807,22 @@ func (a *APIHandler) ensureConfiguredModelsPresent(models []*domain.ModelInfo) [
 		models = append(models, &domain.ModelInfo{
 			ID:          secondary,
 			DisplayName: secondary,
-			Category:    "gemini",
+			Category:    modelCategory(secondary),
 			Recommended: true,
 		})
 	}
 
 	return models
+}
+
+// modelCategory labels configured IDs without restricting what the proxy accepts.
+func modelCategory(id string) string {
+	lower := strings.ToLower(id)
+	if strings.Contains(lower, "claude") || strings.Contains(lower, "gpt") {
+		return "claude_gpt"
+	}
+	if strings.Contains(lower, "gemini") {
+		return "gemini"
+	}
+	return "unknown"
 }
