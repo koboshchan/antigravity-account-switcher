@@ -129,3 +129,5 @@ Estrutura do README adaptada de [othneildrew/Best-README-Template](https://githu
 ### Verificação da conta Google
 
 Quando o Google exige verificação, a conta fica excluída de todas as famílias de modelos, sem alterar a desativação manual ou erros de autenticação. Abra **Verify with Google** no cartão da conta, conclua a verificação e use **Refresh Quotas** ou execute `antigravity-account-switcher refresh-quotas`. A CLI também mostra o link validado do Google. Os links nunca são abertos automaticamente. Somente uma nova consulta direta de cotas ao Google bem-sucedida remove a exigência; cotas locais/em cache, horários de redefinição e outras requisições bem-sucedidas não a removem. A indisponibilidade por HTTP 403 da API de cotas continua sendo um estado separado.
+
+A consulta de cotas se identifica como cliente Antigravity hub 2.23 para receber o bucket semanal independente do Argon. Se um servidor de linguagem local antigo omitir Argon, o switcher consulta o resumo direto de cotas. Argon permanece desconhecido quando o Google não informa seu próprio bucket; percentuais genéricos do Gemini nunca são usados em seu lugar.

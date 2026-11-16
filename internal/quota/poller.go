@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -343,7 +344,7 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 	}
 
 	authoritativeDirectFetch := false
-	if len(buckets) == 0 {
+	if needsDirectQuotaSummary(buckets) {
 		b, err := p.fetchQuotaSummary(ctx, acc)
 		if err != nil {
 			return err
@@ -419,7 +420,7 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 
 	req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "antigravity/2.12.0 (linux; x86_64)")
+	req.Header.Set("User-Agent", quotaUserAgent())
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -443,7 +444,7 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 				retryReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 				retryReq.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 				retryReq.Header.Set("Content-Type", "application/json")
-				retryReq.Header.Set("User-Agent", "antigravity/2.12.0 (linux; x86_64)")
+				retryReq.Header.Set("User-Agent", quotaUserAgent())
 				resp2, err2 := p.client.Do(retryReq)
 				if err2 == nil {
 					defer resp2.Body.Close()
@@ -501,6 +502,7 @@ func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*
 	}
 	req.Header.Set("Authorization", "Bearer "+acc.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", quotaUserAgent())
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -837,4 +839,17 @@ func (p *Poller) clearVerificationAfterRecheck(ctx context.Context, id string, s
 		return repo.ClearVerificationBefore(ctx, id, started)
 	}
 	return nil
+}
+
+// Google exposes the independent Argon pool only to recent hub clients.
+func quotaUserAgent() string { return "antigravity/hub/2.23.0 " + runtime.GOOS + "/" + runtime.GOARCH }
+
+// Older local language servers can omit Argon; never let their partial snapshot hide it.
+func needsDirectQuotaSummary(buckets []*domain.QuotaBucket) bool {
+	for _, bucket := range buckets {
+		if bucket != nil && domain.BucketFamily(bucket) == domain.QuotaFamilyArgon {
+			return false
+		}
+	}
+	return true
 }

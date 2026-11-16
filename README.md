@@ -150,3 +150,5 @@ README structure adapted from [othneildrew/Best-README-Template](https://github.
 ### Google account verification
 
 When Google requires verification, the account is excluded from every model family without changing manual disabled or authentication-error settings. Open **Verify with Google** on its dashboard card, complete the check, then choose **Refresh Quotas** or run `antigravity-account-switcher refresh-quotas`. The CLI also prints Google's validated verification link. Links are never opened automatically. Only a later successful direct Google quota recheck clears the requirement; cached/local quotas, reset timers, and unrelated successful requests do not. Generic quota-endpoint 403 unavailability remains a separate state.
+
+Quota polling identifies as the Antigravity hub 2.23 client so Google can return its independent Argon weekly bucket. If an older local language server omits Argon, the switcher queries the direct quota summary. Argon stays unknown when Google does not explicitly report its own bucket; generic Gemini percentages are never substituted.
