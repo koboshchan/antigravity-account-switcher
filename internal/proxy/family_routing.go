@@ -142,6 +142,14 @@ func (f *FailoverEngine) rotateFamilyLocked(ctx context.Context, acc *domain.Acc
 // quotaEndpointAvailableLocked rejects accounts blocked by a quota-endpoint 403.
 
 func (f *FailoverEngine) quotaEndpointAvailableLocked(ctx context.Context, acc *domain.Account) bool {
+	if acc != nil {
+		if repo, ok := f.quotaRepo.(domain.VerificationRepository); ok {
+			requirement, err := repo.GetVerification(ctx, acc.ID)
+			if err != nil || requirement != nil {
+				return false
+			}
+		}
+	}
 	if acc == nil {
 		return false
 	}

@@ -877,6 +877,14 @@ func runRefreshQuotas(args []string) {
 		if live[acc.ID] {
 			evidence = "live refresh"
 		}
+		verification, verificationErr := quotaRepo.GetVerification(ctx, acc.ID)
+		if verification != nil || verificationErr != nil {
+			fmt.Printf("\n[%s] %s (account status: %s): NEEDS VERIFICATION - complete Google verification, then run refresh-quotas to recheck.\n", activeMarker, acc.Email, acc.Status)
+			if verification != nil && verification.URL != "" {
+				fmt.Printf("  Verify: %s\n", verification.URL)
+			}
+			continue
+		}
 		blocked, availabilityErr := quotaRepo.IsQuotaUnavailable(ctx, acc.ID)
 		if blocked || availabilityErr != nil {
 			fmt.Printf("\n[%s] %s (account status: %s): UNAVAILABLE - quota endpoint permission denied or availability check failed; successful live quota poll required.\n", activeMarker, acc.Email, acc.Status)

@@ -328,18 +328,32 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 			return checkErr
 		}
 	}
-	if !quotaUnavailable && acc.IsActive && p.cfg.BaseURL == DefaultBaseURL {
+	verificationPending := false
+	if repo, ok := p.quotaRepo.(domain.VerificationRepository); ok {
+		requirement, err := repo.GetVerification(ctx, acc.ID)
+		if err != nil {
+			return err
+		}
+		verificationPending = requirement != nil
+	}
+	if !quotaUnavailable && !verificationPending && acc.IsActive && p.cfg.BaseURL == DefaultBaseURL {
 		if lsBuckets, lsErr := QueryLocalLanguageServer(ctx, acc.ID); lsErr == nil && len(lsBuckets) > 0 {
 			buckets = lsBuckets
 		}
 	}
 
+	authoritativeDirectFetch := false
 	if len(buckets) == 0 {
 		b, err := p.fetchQuotaSummary(ctx, acc)
 		if err != nil {
 			return err
 		}
 		buckets = b
+		authoritativeDirectFetch = true
+	}
+
+	if err := p.clearVerificationAfterRecheck(ctx, acc.ID, now, authoritativeDirectFetch); err != nil {
+		return err
 	}
 
 	// 3. Upsert buckets to SQLite
@@ -412,6 +426,9 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 		return nil, fmt.Errorf("quota HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if err := p.inspectVerification(ctx, acc.ID, resp); err != nil {
+		return nil, err
+	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Attempt one forced refresh
@@ -430,6 +447,9 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 				resp2, err2 := p.client.Do(retryReq)
 				if err2 == nil {
 					defer resp2.Body.Close()
+					if err := p.inspectVerification(ctx, acc.ID, resp2); err != nil {
+						return nil, err
+					}
 					if resp2.StatusCode == http.StatusForbidden {
 						if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
 							if err := repo.SetQuotaUnavailable(ctx, acc.ID); err != nil {
@@ -467,8 +487,7 @@ func (p *Poller) fetchQuotaSummary(ctx context.Context, acc *domain.Account) ([]
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("quota request returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("quota request returned HTTP %d", resp.StatusCode)
 	}
 
 	return p.parseQuotaResponse(acc.ID, resp.Body)
@@ -488,6 +507,9 @@ func (p *Poller) fetchLegacyQuota(ctx context.Context, acc *domain.Account) ([]*
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := p.inspectVerification(ctx, acc.ID, resp); err != nil {
+		return nil, err
+	}
 
 	if resp.StatusCode == http.StatusForbidden {
 		if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
@@ -734,6 +756,12 @@ func (p *Poller) restoreExhaustedAccountsPastReset(ctx context.Context, now time
 	}
 
 	for _, id := range resetIDs {
+		if repo, ok := p.quotaRepo.(domain.VerificationRepository); ok {
+			v, err := repo.GetVerification(ctx, id)
+			if err != nil || v != nil {
+				continue
+			}
+		}
 		if repo, ok := p.quotaRepo.(domain.QuotaAvailabilityRepository); ok {
 			blocked, err := repo.IsQuotaUnavailable(ctx, id)
 			if err != nil || blocked {
@@ -777,4 +805,36 @@ func (p *Poller) emitEvent(event *domain.ProxyEvent) {
 		defer cancel()
 		_ = p.eventRepo.Record(ctx, event)
 	}
+}
+
+// inspectVerification preserves the response for existing parsers and detects eligibility failures.
+func (p *Poller) inspectVerification(ctx context.Context, id string, resp *http.Response) error {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+	if err != nil {
+		return err
+	}
+	if len(body) > 1024*1024 {
+		return fmt.Errorf("quota response exceeds maximum size")
+	}
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	if requirement := domain.DetectVerification(body); requirement != nil {
+		if repo, ok := p.quotaRepo.(domain.VerificationRepository); ok {
+			if err := repo.SetVerification(ctx, id, requirement.URL); err != nil {
+				return err
+			}
+		}
+		return fmt.Errorf("Google account needs verification; see account verification link")
+	}
+	return nil
+}
+
+func (p *Poller) clearVerificationAfterRecheck(ctx context.Context, id string, started time.Time, authoritativeDirectFetch bool) error {
+	if !authoritativeDirectFetch {
+		return nil
+	}
+	if repo, ok := p.quotaRepo.(domain.VerificationRepository); ok {
+		return repo.ClearVerificationBefore(ctx, id, started)
+	}
+	return nil
 }

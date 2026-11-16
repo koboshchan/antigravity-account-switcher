@@ -475,6 +475,11 @@
       quotaBodyHtml = '<div class="quota-group"><div class="text-danger">Quota unavailable</div><div class="text-xs text-muted">Quota endpoint permission denied. Cached percentages are hidden. A successful live quota poll is required before this account can route requests.</div></div>';
     }
 
+    if (acc.verification) {
+      const link = safeVerificationLink(acc.verification.url);
+      quotaBodyHtml = `<div class="quota-group"><div class="text-danger">Google verification required</div><p class="text-xs text-muted">This account is excluded from all routing. Complete verification, then use Refresh Quotas to recheck. Other account settings remain unchanged.</p>${link ? `<a class="btn btn-secondary" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Verify with Google</a>` : '<p class="text-xs text-muted">Google did not provide a trusted verification link. Sign in to Google to resolve the requirement.</p>'}</div>`;
+    }
+
     // Status badge formatting
     let statusBadgeClass = 'badge-neutral';
     if (isExhausted) statusBadgeClass = 'badge-danger';
@@ -989,6 +994,10 @@
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   });
+
+  function safeVerificationLink(raw) {
+    try { const u = new URL(raw); const host = u.hostname.toLowerCase(); return u.protocol === 'https:' && !u.username && !u.password && (!u.port || u.port === '443') && !u.hash && (host === 'google.com' || host.endsWith('.google.com') || host === 'antigravity.google') ? u.href : ''; } catch { return ''; }
+  }
 
   async function handleAddAccount() {
     const btn = document.getElementById('btn-add-account');

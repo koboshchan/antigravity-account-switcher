@@ -154,6 +154,7 @@ type AccountWithBuckets struct {
 	*domain.Account
 	Buckets          []*domain.QuotaBucket                  `json:"buckets"`
 	Families         map[domain.QuotaFamily]FamilyQuotaView `json:"families"`
+	Verification     *domain.VerificationRequirement        `json:"verification,omitempty"`
 	QuotaUnavailable bool                                   `json:"quota_unavailable"`
 }
 
@@ -224,8 +225,9 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 		if allBuckets != nil {
 			b = allBuckets[acc.ID]
 		}
+		verification := a.verification(ctx, acc.ID)
 		unavailable := a.quotaUnavailable(ctx, acc.ID)
-		if unavailable {
+		if unavailable || verification != nil {
 			b = nil
 		}
 		if b == nil {
@@ -236,6 +238,7 @@ func (a *APIHandler) listAccounts(w http.ResponseWriter, r *http.Request) {
 			Buckets:          b,
 			Families:         a.familyQuotaViews(ctx, acc, b, unavailable),
 			QuotaUnavailable: unavailable,
+			Verification:     verification,
 		})
 	}
 
@@ -263,8 +266,9 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 	if a.quotaRepo != nil {
 		buckets, _ = a.quotaRepo.GetByAccountID(ctx, id)
 	}
+	verification := a.verification(ctx, acc.ID)
 	unavailable := a.quotaUnavailable(ctx, acc.ID)
-	if unavailable {
+	if unavailable || verification != nil {
 		buckets = nil
 	}
 	if buckets == nil {
@@ -276,6 +280,7 @@ func (a *APIHandler) getAccount(w http.ResponseWriter, r *http.Request, id strin
 		Buckets:          buckets,
 		Families:         a.familyQuotaViews(ctx, acc, buckets, unavailable),
 		QuotaUnavailable: unavailable,
+		Verification:     verification,
 	})
 }
 
@@ -658,6 +663,13 @@ type FamilyQuotaView struct {
 
 func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, buckets []*domain.QuotaBucket, unavailable bool) map[domain.QuotaFamily]FamilyQuotaView {
 	result := make(map[domain.QuotaFamily]FamilyQuotaView)
+	if a.verification(ctx, acc.ID) != nil {
+		for _, family := range []domain.QuotaFamily{domain.QuotaFamilyArgon, domain.QuotaFamilyGemini, domain.QuotaFamilyClaudeGPT} {
+			result[family] = FamilyQuotaView{Status: "needs_verification", Evidence: "Complete Google verification, then refresh quotas to recheck"}
+		}
+		return result
+	}
+
 	now := time.Now().UTC()
 	for _, family := range []domain.QuotaFamily{domain.QuotaFamilyArgon, domain.QuotaFamilyGemini, domain.QuotaFamilyClaudeGPT} {
 		if unavailable {
@@ -759,4 +771,15 @@ func (a *APIHandler) HandleOAuthSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "connected"})
+}
+
+func (a *APIHandler) verification(ctx context.Context, id string) *domain.VerificationRequirement {
+	if repo, ok := a.quotaRepo.(domain.VerificationRepository); ok {
+		requirement, err := repo.GetVerification(ctx, id)
+		if err != nil {
+			return &domain.VerificationRequirement{}
+		}
+		return requirement
+	}
+	return nil
 }

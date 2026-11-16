@@ -125,3 +125,7 @@ Implementação original de [Muriel Gasparini](https://github.com/Muriel-Gaspari
 Estrutura do README adaptada de [othneildrew/Best-README-Template](https://github.com/othneildrew/Best-README-Template/blob/master/BLANK_README.md). A licença MIT do template está disponível [aqui](https://github.com/othneildrew/Best-README-Template/blob/master/LICENSE.txt).
 
 <p align="right"><a href="#readme-top">Voltar ao início</a></p>
+
+### Verificação da conta Google
+
+Quando o Google exige verificação, a conta fica excluída de todas as famílias de modelos, sem alterar a desativação manual ou erros de autenticação. Abra **Verify with Google** no cartão da conta, conclua a verificação e use **Refresh Quotas** ou execute `antigravity-account-switcher refresh-quotas`. A CLI também mostra o link validado do Google. Os links nunca são abertos automaticamente. Somente uma nova consulta direta de cotas ao Google bem-sucedida remove a exigência; cotas locais/em cache, horários de redefinição e outras requisições bem-sucedidas não a removem. A indisponibilidade por HTTP 403 da API de cotas continua sendo um estado separado.

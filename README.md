@@ -146,3 +146,7 @@ README structure adapted from [othneildrew/Best-README-Template](https://github.
 [license-url]: https://github.com/koboshchan/antigravity-account-switcher/blob/main/LICENSE
 [ci-shield]: https://github.com/koboshchan/antigravity-account-switcher/actions/workflows/ci.yml/badge.svg
 [ci-url]: https://github.com/koboshchan/antigravity-account-switcher/actions/workflows/ci.yml
+
+### Google account verification
+
+When Google requires verification, the account is excluded from every model family without changing manual disabled or authentication-error settings. Open **Verify with Google** on its dashboard card, complete the check, then choose **Refresh Quotas** or run `antigravity-account-switcher refresh-quotas`. The CLI also prints Google's validated verification link. Links are never opened automatically. Only a later successful direct Google quota recheck clears the requirement; cached/local quotas, reset timers, and unrelated successful requests do not. Generic quota-endpoint 403 unavailability remains a separate state.

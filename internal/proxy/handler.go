@@ -590,6 +590,29 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if !isPassThrough && currentAcc != nil && (resp.StatusCode == 400 || resp.StatusCode == 403) {
+			prefix, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+			resp.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(prefix), resp.Body), resp.Body}
+			if requirement := domain.DetectVerification(prefix); requirement != nil && h.failoverEngine != nil {
+				if repo, ok := h.failoverEngine.quotaRepo.(domain.VerificationRepository); ok {
+					if err := repo.SetVerification(r.Context(), currentAcc.ID, requirement.URL); err != nil {
+						resp.Body.Close()
+						http.Error(w, "Could not persist account verification requirement", 503)
+						return
+					}
+					next, err := h.failoverEngine.ResolveForModel(r.Context(), currentModel)
+					if err == nil && next != nil {
+						resp.Body.Close()
+						currentAcc = next
+						continue
+					}
+				}
+			}
+		}
+
 		// Check for quota exhaustion: HTTP 429 or HTTP 403 with RESOURCE_EXHAUSTED
 		if !isPassThrough && currentAcc != nil {
 			var bodyBytes []byte
