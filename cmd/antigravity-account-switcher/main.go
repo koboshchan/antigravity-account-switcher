@@ -877,7 +877,18 @@ func runRefreshQuotas(args []string) {
 	accRepo := sqlite.NewAccountRepository(db)
 	quotaRepo := sqlite.NewQuotaRepository(db)
 
-	poller, err := quota.NewPoller(accRepo, quotaRepo, quota.WithBaseURL(*targetURL))
+	oauthService := oauth.NewOAuthService(accRepo)
+	tokenRefresher := quota.TokenRefresherFunc(func(ctx context.Context, rt string) (string, time.Time, error) {
+		resp, err := oauthService.RefreshToken(ctx, rt)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		return resp.AccessToken, time.Now().UTC().Add(time.Duration(resp.ExpiresIn) * time.Second), nil
+	})
+	poller, err := quota.NewPoller(accRepo, quotaRepo,
+		quota.WithBaseURL(*targetURL),
+		quota.WithTokenRefresher(tokenRefresher),
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize poller: %v\n", err)
 		os.Exit(1)
