@@ -461,14 +461,6 @@
       `;
     }
 
-    // Keep the existing compact card design; quota families remain independently readable.
-    const families = acc.families || {};
-    const familySummary = [['argon', 'Gemini 4 Argon'], ['gemini', 'Gemini'], ['claude_gpt', 'Claude & GPT']].map(([key, label]) => {
-      const family = families[key] || {status: 'unknown', evidence: 'No family-specific quota reported'};
-      const reset = family.reset_time ? ' · reset ' + new Date(family.reset_time).toLocaleString() : '';
-      return `<div class="text-xs text-secondary" title="${escapeHtml(family.evidence || '')}">${escapeHtml(label)}${family.active ? ' · ACTIVE' : ''} · ${escapeHtml(family.status)}${escapeHtml(reset)}</div>`;
-    }).join('');
-    quotaBodyHtml = `<div class="quota-group"><div class="text-xs text-muted">Family routing · cached evidence, not a live quota guarantee</div>${familySummary}</div>` + quotaBodyHtml;
     quotaBodyHtml += `<div class="quota-group"><div class="quota-group-header"><span class="quota-group-name">Gemini 4 Argon</span><span class="quota-group-models">Independent quota</span></div>${argonBuckets.length ? argonBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('') : '<div class="text-xs text-muted">Unknown · Google has not reported Argon-specific quota.</div>'}</div>`;
 
     if (acc.quota_unavailable) {
