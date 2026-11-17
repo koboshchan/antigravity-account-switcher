@@ -412,12 +412,20 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isPassThrough := false
 
 	if isCloudCode {
+		if isCarbonModel(origModel) && h.failoverEngine == nil {
+			http.Error(w, "Carbon requires an eligible Ultra account with Gemini capacity", http.StatusTooManyRequests)
+			return
+		}
 		// Resolve active account from repository
 		acc, accErr := h.accountRepo.GetActive(ctx)
 		if h.failoverEngine != nil {
 			acc, accErr = h.failoverEngine.ResolveForModel(ctx, origModel)
 		}
 		if accErr != nil || acc == nil {
+			if isCarbonModel(origModel) {
+				http.Error(w, "No Ultra account has available Gemini quota", http.StatusTooManyRequests)
+				return
+			}
 			nextAcc, nextErr := h.accountRepo.GetNextAvailable(ctx, "")
 			if modelFamily(origModel) != "" {
 				nextAcc, nextErr = nil, domain.ErrNoAvailableAccount
@@ -487,6 +495,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !isPassThrough && modelFamily(currentModel) != "" {
 			resolved, err := h.failoverEngine.ResolveForModel(ctx, currentModel)
 			if err != nil || resolved == nil {
+				if isCarbonModel(currentModel) {
+					http.Error(w, "No Ultra account has available Gemini quota", http.StatusTooManyRequests)
+					return
+				}
 				http.Error(w, "no available account for outgoing model family", http.StatusServiceUnavailable)
 				return
 			}

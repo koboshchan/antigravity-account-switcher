@@ -154,3 +154,5 @@ When Google requires verification, the account is excluded from every model fami
 Quota polling identifies as the Antigravity hub 2.23 client so Google can return its independent Argon weekly bucket. If an older local language server omits Argon, the switcher queries the direct quota summary. Argon stays unknown when Google does not explicitly report its own bucket; generic Gemini percentages are never substituted.
 
 Accounts with a successful live quota poll reporting Gemini quota but no separate Argon bucket are marked Ultra. Argon and Carbon share the measured Gemini 5-hour and weekly pool, including reactive rate-limit cooldowns. Failed polls never establish this inference; separately reported Argon pools remain independent.
+
+Carbon requests are restricted to live-confirmed Ultra accounts with measured Gemini capacity. If none are eligible, the proxy returns HTTP 429 without trying independent-Argon or unknown-tier accounts. Argon routing is unchanged.

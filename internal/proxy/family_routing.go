@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
@@ -18,6 +19,11 @@ func modelFamily(model string) domain.QuotaFamily {
 	default:
 		return ""
 	}
+}
+
+func isCarbonModel(model string) bool {
+	lower := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	return lower == "carbon" || strings.HasPrefix(lower, "carbon-") || strings.Contains(lower, "gemini-4-carbon")
 }
 
 // accountQuotaFamilyLocked resolves topology per account for mixed-tier pools.
@@ -42,6 +48,18 @@ func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.A
 	if !f.quotaEndpointAvailableLocked(ctx, acc) {
 		return false
 	}
+	// Carbon is an Ultra-only entitlement. Missing/failed topology evidence is
+	// not permission to probe a non-Ultra account, including during rotation.
+	if isCarbonModel(model) {
+		repo, ok := f.quotaRepo.(domain.SharedGeminiRepository)
+		if !ok {
+			return false
+		}
+		shared, err := repo.GetSharedGemini(ctx, acc.ID)
+		if err != nil || !shared {
+			return false
+		}
+	}
 	family := f.accountQuotaFamilyLocked(ctx, acc.ID, model)
 	if family == "" {
 		return acc.IsAvailable()
@@ -63,7 +81,7 @@ func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.A
 		}
 		known, available = domain.FamilyQuota(buckets, family, now)
 	}
-	return available && (acc.IsAvailable() || known)
+	return available && (acc.IsAvailable() || known) && (!isCarbonModel(model) || known)
 }
 
 // ResolveForModel never changes the client's selected model. It permits recovery
