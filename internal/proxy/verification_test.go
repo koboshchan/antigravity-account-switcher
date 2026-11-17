@@ -16,7 +16,7 @@ func TestVerificationInvalidatesAllFamiliesAndNeverTimerRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	models := map[domain.QuotaFamily]string{domain.QuotaFamilyGemini: "gemini-3.8-flash", domain.QuotaFamilyArgon: "argon", domain.QuotaFamilyClaudeGPT: "claude-sonnet-5"}
+	models := map[domain.QuotaFamily]string{domain.QuotaFamilyGemini: "gemini-3.8-flash", domain.QuotaFamilyArgon: "argon-trial", domain.QuotaFamilyClaudeGPT: "claude-sonnet-5"}
 	for family := range models {
 		if err := quotas.SetFamilyActive(ctx, family, "a"); err != nil {
 			t.Fatal(err)

@@ -412,8 +412,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isPassThrough := false
 
 	if isCloudCode {
-		if isCarbonModel(origModel) && h.failoverEngine == nil {
-			http.Error(w, "Carbon requires an eligible Ultra account with Gemini capacity", http.StatusTooManyRequests)
+		if requiresUltra(origModel) && h.failoverEngine == nil {
+			http.Error(w, "Requested model requires an eligible Ultra account with Gemini capacity", http.StatusTooManyRequests)
 			return
 		}
 		// Resolve active account from repository
@@ -422,7 +422,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			acc, accErr = h.failoverEngine.ResolveForModel(ctx, origModel)
 		}
 		if accErr != nil || acc == nil {
-			if isCarbonModel(origModel) {
+			if requiresUltra(origModel) {
 				http.Error(w, "No Ultra account has available Gemini quota", http.StatusTooManyRequests)
 				return
 			}
@@ -493,9 +493,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Bind credentials to this request model family on every retry.
 		if !isPassThrough && modelFamily(currentModel) != "" {
-			resolved, err := h.failoverEngine.ResolveForModel(ctx, currentModel)
+			resolved, err := h.failoverEngine.ResolveForModel(ctx, origModel)
 			if err != nil || resolved == nil {
-				if isCarbonModel(currentModel) {
+				if requiresUltra(currentModel) {
 					http.Error(w, "No Ultra account has available Gemini quota", http.StatusTooManyRequests)
 					return
 				}
@@ -503,6 +503,30 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			currentAcc = resolved
+		}
+		// Derive promotion afresh per selected account, never retain it on fallback.
+		if entitlementModelKey(origModel) == "gemini-4-argon-trial" {
+			currentModel, currentBody, currentPath, currentQuery = origModel, origBody, origPath, origQuery
+		}
+		if !isPassThrough && currentAcc != nil && entitlementModelKey(origModel) == "gemini-4-argon-trial" {
+			if repo, ok := h.failoverEngine.quotaRepo.(domain.SharedGeminiRepository); ok {
+				if shared, err := repo.GetSharedGemini(ctx, currentAcc.ID); err == nil && shared {
+					currentModel = "gemini-4-argon"
+					var rewriteErr error
+					if _, _, _, err := FindModelValueBounds(origBody); err == nil {
+						currentBody, rewriteErr = RewriteModelInBody(origBody, currentModel)
+					}
+					if rewriteErr != nil {
+						http.Error(w, "Could not promote Argon model", 500)
+						return
+					}
+					currentPath = RewriteModelInPath(origPath, currentModel)
+					currentQuery = RewriteModelInQuery(origQuery, currentModel)
+					if h.eventBroadcaster != nil {
+						h.eventBroadcaster.Broadcast(&domain.ProxyEvent{Type: domain.EventTypeAccountSwitched, AccountID: currentAcc.ID, Message: "Ultra model rewrite: gemini-4-argon-trial to gemini-4-argon", Timestamp: time.Now().UTC()})
+					}
+				}
+			}
 		}
 		// Proactively refresh access token if expired or near expiration window
 		if !isPassThrough && currentAcc != nil && currentAcc.IsTokenExpired(h.cfg.TokenExpiryMargin) && h.tokenRefresher != nil && currentAcc.RefreshToken != "" {
@@ -608,6 +632,20 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				io.Reader
 				io.Closer
 			}{io.MultiReader(bytes.NewReader(prefix), resp.Body), resp.Body}
+			if h.failoverEngine != nil && origModel != "" && isSubscriptionRequired(resp.StatusCode, prefix) {
+				_, _ = h.failoverEngine.handleSubscriptionRequired(ctx, currentAcc, currentModel)
+				if currentModel != origModel {
+					_, _ = h.failoverEngine.handleSubscriptionRequired(ctx, currentAcc, origModel)
+				}
+				next, err := h.failoverEngine.ResolveForModel(ctx, origModel)
+				if err == nil && next != nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512*1024))
+					_ = resp.Body.Close()
+					currentAcc = next
+					continue
+				}
+				// Preserve Google's diagnostic when no entitled candidate remains.
+			}
 			if requirement := domain.DetectVerification(prefix); requirement != nil && h.failoverEngine != nil {
 				if repo, ok := h.failoverEngine.quotaRepo.(domain.VerificationRepository); ok {
 					if err := repo.SetVerification(r.Context(), currentAcc.ID, requirement.URL); err != nil {

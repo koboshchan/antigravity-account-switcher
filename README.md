@@ -156,3 +156,5 @@ Quota polling identifies as the Antigravity hub 2.23 client so Google can return
 Accounts with a successful live quota poll reporting Gemini quota but no separate Argon bucket are marked Ultra. Argon and Carbon share the measured Gemini 5-hour and weekly pool, including reactive rate-limit cooldowns. Failed polls never establish this inference; separately reported Argon pools remain independent.
 
 Carbon requests are restricted to live-confirmed Ultra accounts with measured Gemini capacity. If none are eligible, the proxy returns HTTP 429 without trying independent-Argon or unknown-tier accounts. Argon routing is unchanged.
+
+Normal Argon and Carbon require a live-confirmed Ultra account with measured Gemini capacity. Explicit `gemini-4-argon-trial` requests prefer eligible Ultra accounts and are promoted to `gemini-4-argon` upstream, with a dashboard rewrite event. Non-Ultra accounts retain the requested trial ID. A structured upstream `403 SUBSCRIPTION_REQUIRED` temporarily excludes that account for the rejected model and rotates without blocking unrelated models. License exclusions last 30 minutes in the running process.

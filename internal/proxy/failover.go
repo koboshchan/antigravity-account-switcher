@@ -38,6 +38,7 @@ type FailoverEngine struct {
 	eventRepo        domain.EventRepository
 	familyCooldowns  map[string]map[domain.QuotaFamily]time.Time
 	familyActive     map[domain.QuotaFamily]string
+	modelDenied      map[string]map[string]time.Time
 }
 
 func NewFailoverEngine(accounts domain.AccountRepository, events domain.EventBroadcaster, repo domain.EventRepository, opts ...FailoverOption) *FailoverEngine {

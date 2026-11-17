@@ -16,7 +16,7 @@ import (
 
 // Exercise HTTP routing, not just the family classifier or candidate selector.
 func TestQuotaRoutingMatrix(t *testing.T) {
-	for _, model := range []string{"gemini-3.8-flash-high", "gemini-4-argon", "claude-sonnet-5-5"} {
+	for _, model := range []string{"gemini-3.8-flash-high", "gemini-4-argon-trial", "claude-sonnet-5-5"} {
 		for _, source := range []string{"body", "path", "query"} {
 			for _, active := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/active=%t", model, source, active), func(t *testing.T) {

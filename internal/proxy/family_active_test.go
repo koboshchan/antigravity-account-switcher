@@ -19,7 +19,7 @@ func TestIndependentFamilyActiveTokensAndAutomaticRotation(t *testing.T) {
 	ctx := context.Background()
 	db, accounts, _, _ := setupTestDB(t)
 	quotas := sqlite.NewQuotaRepository(db)
-	models := map[domain.QuotaFamily]string{domain.QuotaFamilyGemini: "gemini-3.8-flash-high", domain.QuotaFamilyClaudeGPT: "claude-sonnet-5", domain.QuotaFamilyArgon: "gemini-4-argon"}
+	models := map[domain.QuotaFamily]string{domain.QuotaFamilyGemini: "gemini-3.8-flash-high", domain.QuotaFamilyClaudeGPT: "claude-sonnet-5", domain.QuotaFamilyArgon: "gemini-4-argon-trial"}
 	for _, id := range []string{"a", "b", "c", "d"} {
 		if err := accounts.Create(ctx, &domain.Account{ID: id, Email: id + "@test.invalid", AccessToken: "token-" + id, TokenExpiry: time.Now().Add(time.Hour), Status: domain.AccountStatusActive, IsActive: id == "a"}); err != nil {
 			t.Fatal(err)

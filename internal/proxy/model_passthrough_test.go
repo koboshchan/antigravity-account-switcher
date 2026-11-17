@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/domain"
+	"github.com/Muriel-Gasparini/antigravity-account-switcher/internal/store/sqlite"
 )
 
 func TestProxyPreservesClientModelWithDashboardDefaults(t *testing.T) {
@@ -24,7 +25,7 @@ func TestProxyPreservesClientModelWithDashboardDefaults(t *testing.T) {
 	for _, model := range models {
 		for _, source := range []string{"body", "path", "query"} {
 			t.Run(model+"/"+source, func(t *testing.T) {
-				_, repo, _, _ := setupTestDB(t)
+				db, repo, _, _ := setupTestDB(t)
 				now := time.Now().UTC()
 				acc := &domain.Account{ID: "acc", Email: "test@example.com", AccessToken: "test",
 					IsActive: true, Status: domain.AccountStatusActive, CreatedAt: now, UpdatedAt: now}
@@ -58,7 +59,10 @@ func TestProxyPreservesClientModelWithDashboardDefaults(t *testing.T) {
 					_, _ = io.WriteString(w, `{"ok":true}`)
 				}))
 				defer upstream.Close()
-				engine := NewFailoverEngine(repo, nil, nil)
+				quotas := sqlite.NewQuotaRepository(db)
+				_ = quotas.UpsertBuckets(context.Background(), []*domain.QuotaBucket{{AccountID: "acc", BucketID: "gemini-weekly", RemainingFraction: 1}})
+				_ = quotas.SetSharedGemini(context.Background(), "acc", true)
+				engine := NewFailoverEngine(repo, nil, nil, WithQuotaRepository(quotas))
 				handler, err := NewProxyHandler(repo, WithTargetURL(upstream.URL), WithFailoverEngine(engine), WithMaxRetries(0))
 				if err != nil {
 					t.Fatal(err)

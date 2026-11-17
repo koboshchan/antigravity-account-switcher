@@ -60,8 +60,8 @@ func TestUltraArgonCarbonUseGeminiCapacityAndCooldown(t *testing.T) {
 	}
 }
 
-func TestCarbonNeverUsesIndependentOrUnknownAccounts(t *testing.T) {
-	for _, model := range []string{"carbon", "Carbon", "models/carbon", "gemini-4-carbon-high"} {
+func TestUltraModelsNeverUseIndependentOrUnknownAccounts(t *testing.T) {
+	for _, model := range []string{"carbon", "Carbon", "models/carbon", "gemini-4-carbon-high", "argon", "gemini-4-argon", "gemini-4-argon-low", "gemini-4-argon-high"} {
 		t.Run(model, func(t *testing.T) {
 			ctx := context.Background()
 			db, accounts, _, _ := setupTestDB(t)
@@ -98,7 +98,7 @@ func TestCarbonNeverUsesIndependentOrUnknownAccounts(t *testing.T) {
 				t.Fatalf("Carbon preflight escaped cooldown: %v %v", got, err)
 			}
 			// Argon retains access to its independent pool.
-			got, err = engine.ResolveForModel(ctx, "argon")
+			got, err = engine.ResolveForModel(ctx, "argon-trial")
 			if err != nil || got.ID != "standard" {
 				t.Fatalf("Argon behavior changed: %v %v", got, err)
 			}

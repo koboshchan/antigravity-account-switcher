@@ -14,7 +14,7 @@ import (
 )
 
 func TestThreeFamilies429Isolation(t *testing.T) {
-	models := map[domain.QuotaFamily]string{domain.QuotaFamilyArgon: "gemini-4-argon", domain.QuotaFamilyGemini: "gemini-3.8-flash-high", domain.QuotaFamilyClaudeGPT: "claude-sonnet-5"}
+	models := map[domain.QuotaFamily]string{domain.QuotaFamilyArgon: "gemini-4-argon-trial", domain.QuotaFamilyGemini: "gemini-3.8-flash-high", domain.QuotaFamilyClaudeGPT: "claude-sonnet-5"}
 	for failedFamily, failedModel := range models {
 		t.Run(string(failedFamily), func(t *testing.T) {
 			ctx := context.Background()
@@ -93,7 +93,7 @@ func TestQuota403BlocksEveryFamilyUntilLaterSuccessfulPoll(t *testing.T) {
 	if len(cached) != 3 {
 		t.Fatal("internal evidence not preserved")
 	}
-	models := []string{"gemini-3.8-flash-high", "Argon", "gemini-4-argon", "claude-sonnet-5", "unknown-custom", ""}
+	models := []string{"gemini-3.8-flash-high", "argon-trial", "gemini-4-argon-trial", "claude-sonnet-5", "unknown-custom", ""}
 	for _, fallback := range []bool{false, true} {
 		engine := NewFailoverEngine(accounts, nil, nil, WithQuotaRepository(sqlite.NewQuotaRepository(db)))
 		for _, model := range models {
@@ -155,7 +155,7 @@ func TestPositiveLowQuotaRemainsEligible(t *testing.T) {
 			}
 		}
 		engine := NewFailoverEngine(accounts, nil, nil, WithQuotaRepository(quotas))
-		for _, model := range []string{"Argon", "gemini-3.8-flash-high", "claude-sonnet-5"} {
+		for _, model := range []string{"argon-trial", "gemini-3.8-flash-high", "claude-sonnet-5"} {
 			got, err := engine.ResolveForModel(ctx, model)
 			if err != nil || got == nil || got.ID != "a" {
 				t.Fatalf("positive %.2f rejected for %s: %v %v", fraction, model, got, err)

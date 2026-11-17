@@ -26,6 +26,12 @@ func isCarbonModel(model string) bool {
 	return lower == "carbon" || strings.HasPrefix(lower, "carbon-") || strings.Contains(lower, "gemini-4-carbon")
 }
 
+// Trial Argon remains a distinct, explicitly requested product.
+func requiresUltra(model string) bool {
+	lower := entitlementModelKey(model)
+	return isCarbonModel(model) || (modelFamily(model) == domain.QuotaFamilyArgon && !strings.Contains(lower, "trial"))
+}
+
 // accountQuotaFamilyLocked resolves topology per account for mixed-tier pools.
 func (f *FailoverEngine) accountQuotaFamilyLocked(ctx context.Context, id, model string) domain.QuotaFamily {
 	family := modelFamily(model)
@@ -45,12 +51,15 @@ func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.A
 	if acc == nil || (acc.Status != domain.AccountStatusActive && acc.Status != domain.AccountStatusExhausted) {
 		return false
 	}
+	if f.modelDenied[acc.ID][entitlementModelKey(model)].After(time.Now()) {
+		return false
+	}
 	if !f.quotaEndpointAvailableLocked(ctx, acc) {
 		return false
 	}
-	// Carbon is an Ultra-only entitlement. Missing/failed topology evidence is
+	// Normal Argon and Carbon are Ultra-only entitlements. Missing/failed topology evidence is
 	// not permission to probe a non-Ultra account, including during rotation.
-	if isCarbonModel(model) {
+	if requiresUltra(model) {
 		repo, ok := f.quotaRepo.(domain.SharedGeminiRepository)
 		if !ok {
 			return false
@@ -81,7 +90,7 @@ func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.A
 		}
 		known, available = domain.FamilyQuota(buckets, family, now)
 	}
-	return available && (acc.IsAvailable() || known) && (!isCarbonModel(model) || known)
+	return available && (acc.IsAvailable() || known) && (!requiresUltra(model) || known)
 }
 
 // ResolveForModel never changes the client's selected model. It permits recovery
@@ -89,6 +98,19 @@ func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.A
 func (f *FailoverEngine) ResolveForModel(ctx context.Context, model string) (*domain.Account, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Trial requests prefer eligible confirmed Ultra accounts, promoted upstream.
+	if entitlementModelKey(model) == "gemini-4-argon-trial" {
+		if accounts, err := f.accountRepo.List(ctx); err == nil {
+			for _, acc := range accounts {
+				if f.accountQuotaFamilyLocked(ctx, acc.ID, model) == domain.QuotaFamilyGemini && f.familyEligibleLocked(ctx, acc, model) && f.familyEligibleLocked(ctx, acc, "gemini-4-argon") {
+					if err := f.setActiveForModelLocked(ctx, model, acc.ID); err != nil {
+						return nil, err
+					}
+					return acc, nil
+				}
+			}
+		}
+	}
 	active, err := f.activeForModelLocked(ctx, model)
 	// Model-less legacy traffic has no family to preflight; preserve transparent
 	// upstream exhaustion responses, but never adopt disabled or auth-error rows.
