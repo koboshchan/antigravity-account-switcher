@@ -351,6 +351,7 @@
     const claudeWeekly = findBucket('weekly', '3p') || findBucket('weekly', 'claude');
     const gemini5h = findBucket('5h', 'gemini');
     const geminiWeekly = findBucket('weekly', 'gemini');
+    const isUltra = !acc.quota_unavailable && !acc.verification && Boolean(acc.families?.argon?.shared_gemini);
     const argonBuckets = buckets.filter(b => ((b.bucket_id || '') + ' ' + (b.display_name || '')).toLowerCase().includes('argon'));
 
     // Identify standard buckets to find any custom/other buckets
@@ -451,7 +452,7 @@
         <div class="quota-group">
           <div class="quota-group-header">
             <span class="quota-group-name">Gemini Models</span>
-            <span class="quota-group-models">Flash, Pro</span>
+            <span class="quota-group-models">${isUltra ? 'Flash, Pro, Argon, Carbon' : 'Flash, Pro'}</span>
           </div>
           ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
           ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
@@ -461,7 +462,9 @@
       `;
     }
 
-    quotaBodyHtml += `<div class="quota-group"><div class="quota-group-header"><span class="quota-group-name">Gemini 4 Argon</span><span class="quota-group-models">Independent quota</span></div>${argonBuckets.length ? argonBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('') : '<div class="text-xs text-muted">Unknown · Google has not reported Argon-specific quota.</div>'}</div>`;
+    if (!isUltra) quotaBodyHtml += `<div class="quota-group"><div class="quota-group-header"><span class="quota-group-name">Gemini 4 Argon</span><span class="quota-group-models">Independent quota</span></div>${argonBuckets.length ? argonBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('') : '<div class="text-xs text-muted">Unknown · Google has not reported Argon-specific quota.</div>'}</div>`;
+
+    if (isUltra) quotaBodyHtml += '<div class="quota-group"><div class="text-xs text-muted">Argon and Carbon included in the Gemini 5-hour and weekly pool.</div></div>';
 
     if (acc.quota_unavailable) {
       quotaBodyHtml = '<div class="quota-group"><div class="text-danger">Quota unavailable</div><div class="text-xs text-muted">Quota endpoint permission denied. Cached percentages are hidden. A successful live quota poll is required before this account can route requests.</div></div>';
@@ -496,6 +499,7 @@
             </button>
           </div>
         </div>
+        ${isUltra ? '<span class="badge badge-success">Ultra</span>' : ''}
         <div class="badge ${statusBadgeClass}">
           ${escapeHtml((acc.status || 'ACTIVE').toUpperCase())}
         </div>

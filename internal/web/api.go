@@ -655,10 +655,11 @@ func modelCategory(id string) string {
 
 // FamilyQuotaView distinguishes measured/cached evidence from reactive cooldowns.
 type FamilyQuotaView struct {
-	Active    bool       `json:"active"`
-	Status    string     `json:"status"`
-	Evidence  string     `json:"evidence"`
-	ResetTime *time.Time `json:"reset_time,omitempty"`
+	SharedGemini bool       `json:"shared_gemini,omitempty"`
+	Active       bool       `json:"active"`
+	Status       string     `json:"status"`
+	Evidence     string     `json:"evidence"`
+	ResetTime    *time.Time `json:"reset_time,omitempty"`
 }
 
 func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, buckets []*domain.QuotaBucket, unavailable bool) map[domain.QuotaFamily]FamilyQuotaView {
@@ -681,8 +682,18 @@ func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, 
 			id, err := repo.GetFamilyActive(ctx, family)
 			active = err == nil && id == acc.ID
 		}
-		known, available := domain.FamilyQuota(buckets, family, now)
-		view := FamilyQuotaView{Active: active, Status: "unknown", Evidence: "No family-specific quota reported"}
+		quotaFamily := family
+		shared := false
+		if family == domain.QuotaFamilyArgon {
+			if repo, ok := a.quotaRepo.(domain.SharedGeminiRepository); ok {
+				shared, _ = repo.GetSharedGemini(ctx, acc.ID)
+				if shared {
+					quotaFamily = domain.QuotaFamilyGemini
+				}
+			}
+		}
+		known, available := domain.FamilyQuota(buckets, quotaFamily, now)
+		view := FamilyQuotaView{SharedGemini: shared, Active: active, Status: "unknown", Evidence: "No family-specific quota reported"}
 		var reset time.Time
 		if known {
 			view.Evidence = "Cached quota evidence; live refresh not guaranteed"
@@ -691,13 +702,13 @@ func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, 
 				view.Status = "blocked"
 			}
 			for _, b := range buckets {
-				if domain.BucketFamily(b) == family && b.IsExhausted() && !b.HasReset(now) && b.ResetTime.After(reset) {
+				if domain.BucketFamily(b) == quotaFamily && b.IsExhausted() && !b.HasReset(now) && b.ResetTime.After(reset) {
 					reset = b.ResetTime
 				}
 			}
 		}
 		if repo, ok := a.quotaRepo.(domain.FamilyCooldownRepository); ok {
-			cooldown, err := repo.GetFamilyCooldown(ctx, acc.ID, family)
+			cooldown, err := repo.GetFamilyCooldown(ctx, acc.ID, quotaFamily)
 			if err != nil {
 				view.Status = "unavailable"
 			} else if cooldown.After(now) {
@@ -712,6 +723,9 @@ func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, 
 		}
 		if acc.Status == domain.AccountStatusExhausted && !known && view.Status == "unknown" {
 			view.Evidence = "Legacy exhaustion; no family-specific quota reported"
+		}
+		if shared {
+			view.Evidence = "Argon and Carbon included in the Gemini pool; topology confirmed by live quota poll"
 		}
 		if !reset.IsZero() {
 			r := reset
