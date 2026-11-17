@@ -101,6 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_proxy_events_created_at ON proxy_events(created_a
 	{Version: 3, Description: "quota_endpoint_availability", SQL: `CREATE TABLE quota_unavailable (account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, observed_at INTEGER NOT NULL);`},
 	{Version: 4, Description: "family_active_accounts", SQL: `CREATE TABLE family_active_accounts (family TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE);`},
 	{Version: 5, Description: "account_verification", SQL: `CREATE TABLE account_verification(account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,url TEXT NOT NULL,observed_at INTEGER NOT NULL);`},
+	{Version: 6, Description: "shared_gemini_pool", SQL: `CREATE TABLE shared_gemini_pool(account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE);`},
 }
 
 // Migrate applies all pending schema migrations to the database.

@@ -256,3 +256,18 @@ func (r *QuotaRepository) SetFamilyActive(ctx context.Context, family domain.Quo
 	_, err := r.db.ExecContext(ctx, `INSERT INTO family_active_accounts(family,account_id) SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM quota_unavailable WHERE account_id=?) AND NOT EXISTS(SELECT 1 FROM account_verification WHERE account_id=?) ON CONFLICT(family) DO UPDATE SET account_id=excluded.account_id`, family, id, id, id)
 	return err
 }
+
+// SetSharedGemini persists topology separately from measured quota buckets.
+func (r *QuotaRepository) SetSharedGemini(ctx context.Context, id string, shared bool) error {
+	if !shared {
+		_, err := r.db.ExecContext(ctx, "DELETE FROM shared_gemini_pool WHERE account_id=?", id)
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, "INSERT OR IGNORE INTO shared_gemini_pool(account_id) VALUES(?)", id)
+	return err
+}
+func (r *QuotaRepository) GetSharedGemini(ctx context.Context, id string) (bool, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM shared_gemini_pool WHERE account_id=?", id).Scan(&count)
+	return count > 0, err
+}

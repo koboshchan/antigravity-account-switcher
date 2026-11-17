@@ -287,7 +287,17 @@ func (p *Poller) PollAccount(ctx context.Context, accountID string) ([]*domain.Q
 	return p.quotaRepo.GetByAccountID(ctx, accountID)
 }
 
-func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.Time) error {
+func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.Time) (pollErr error) {
+	// Failed polls cannot establish an Ultra inference, even after an older success.
+	defer func() {
+		if pollErr != nil {
+			if repo, ok := p.quotaRepo.(domain.SharedGeminiRepository); ok {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+				_ = repo.SetSharedGemini(cleanupCtx, acc.ID, false)
+			}
+		}
+	}()
 	if acc.Status == domain.AccountStatusDisabled {
 		return nil
 	}
@@ -357,6 +367,22 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 		return err
 	}
 
+	shared := false
+	if authoritativeDirectFetch {
+		gemini, argon := false, false
+		for _, b := range buckets {
+			gemini = gemini || domain.BucketFamily(b) == domain.QuotaFamilyGemini
+			argon = argon || domain.BucketFamily(b) == domain.QuotaFamilyArgon
+		}
+		shared = gemini && !argon
+	}
+	// Publish topology only after the complete successful poll, never local data.
+	if repo, ok := p.quotaRepo.(domain.SharedGeminiRepository); ok {
+		if err := repo.SetSharedGemini(ctx, acc.ID, false); err != nil {
+			return err
+		}
+	}
+
 	// 3. Upsert buckets to SQLite
 	if err := p.quotaRepo.DeleteByAccountID(ctx, acc.ID); err != nil {
 		return err
@@ -403,6 +429,12 @@ func (p *Poller) pollAccount(ctx context.Context, acc *domain.Account, now time.
 				},
 				Timestamp: now,
 			})
+		}
+	}
+
+	if repo, ok := p.quotaRepo.(domain.SharedGeminiRepository); ok {
+		if err := repo.SetSharedGemini(ctx, acc.ID, shared); err != nil {
+			return err
 		}
 	}
 

@@ -101,7 +101,7 @@ func CategorizeModel(model string) ModelCategory {
 		lower = strings.ToLower(m)
 	}
 
-	if lower == "argon" || strings.HasPrefix(lower, "argon-") || strings.Contains(lower, "gemini-4-argon") {
+	if lower == "carbon" || strings.HasPrefix(lower, "carbon-") || strings.Contains(lower, "gemini-4-carbon") || lower == "argon" || strings.HasPrefix(lower, "argon-") || strings.Contains(lower, "gemini-4-argon") {
 		return CategoryArgon
 	}
 

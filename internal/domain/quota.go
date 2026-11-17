@@ -114,6 +114,12 @@ type QuotaAvailabilityRepository interface {
 	ClearQuotaUnavailableBefore(context.Context, string, time.Time) error
 }
 
+// SharedGeminiRepository stores topology, never synthetic quota values.
+type SharedGeminiRepository interface {
+	SetSharedGemini(context.Context, string, bool) error
+	GetSharedGemini(context.Context, string) (bool, error)
+}
+
 // FamilyActiveRepository stores independent automatic routing selections.
 type FamilyActiveRepository interface {
 	GetFamilyActive(context.Context, QuotaFamily) (string, error)

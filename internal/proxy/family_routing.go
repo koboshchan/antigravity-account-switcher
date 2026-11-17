@@ -20,6 +20,19 @@ func modelFamily(model string) domain.QuotaFamily {
 	}
 }
 
+// accountQuotaFamilyLocked resolves topology per account for mixed-tier pools.
+func (f *FailoverEngine) accountQuotaFamilyLocked(ctx context.Context, id, model string) domain.QuotaFamily {
+	family := modelFamily(model)
+	if family == domain.QuotaFamilyArgon {
+		if repo, ok := f.quotaRepo.(domain.SharedGeminiRepository); ok {
+			if shared, err := repo.GetSharedGemini(ctx, id); err == nil && shared {
+				return domain.QuotaFamilyGemini
+			}
+		}
+	}
+	return family
+}
+
 // familyEligibleLocked is shared by preflight, rotation and anti-stampede adoption.
 // Auth errors and manual disables always win, even when a quota snapshot is healthy.
 func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.Account, model string) bool {
@@ -29,7 +42,7 @@ func (f *FailoverEngine) familyEligibleLocked(ctx context.Context, acc *domain.A
 	if !f.quotaEndpointAvailableLocked(ctx, acc) {
 		return false
 	}
-	family := modelFamily(model)
+	family := f.accountQuotaFamilyLocked(ctx, acc.ID, model)
 	if family == "" {
 		return acc.IsAvailable()
 	}
@@ -96,7 +109,7 @@ func (f *FailoverEngine) selectFamilyAccountLocked(ctx context.Context, model, e
 // rotateFamilyLocked records exhaustion and automatically selects within this family.
 
 func (f *FailoverEngine) rotateFamilyLocked(ctx context.Context, acc *domain.Account, model string) (*domain.Account, error) {
-	family := modelFamily(model)
+	family := f.accountQuotaFamilyLocked(ctx, acc.ID, model)
 	now := time.Now().UTC()
 	reset := now.Add(5 * time.Minute)
 	if f.quotaRepo != nil {
