@@ -102,7 +102,7 @@ func (f *FailoverEngine) ResolveForModel(ctx context.Context, model string) (*do
 	if entitlementModelKey(model) == "gemini-4-argon-trial" {
 		if accounts, err := f.accountRepo.List(ctx); err == nil {
 			for _, acc := range accounts {
-				if f.accountQuotaFamilyLocked(ctx, acc.ID, model) == domain.QuotaFamilyGemini && f.familyEligibleLocked(ctx, acc, model) && f.familyEligibleLocked(ctx, acc, "gemini-4-argon") {
+				if f.accountQuotaFamilyLocked(ctx, acc.ID, model) == domain.QuotaFamilyGemini && f.familyEligibleLocked(ctx, acc, model) && f.familyEligibleLocked(ctx, acc, "gemini-4-argon-low") {
 					if err := f.setActiveForModelLocked(ctx, model, acc.ID); err != nil {
 						return nil, err
 					}

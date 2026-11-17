@@ -59,7 +59,7 @@ func TestSubscriptionFailoverPreservesExactModel(t *testing.T) {
 					got, _, _ := ExtractModelFromRequest(r, []byte(builder.String()))
 					want := model
 					if model == "gemini-4-argon-trial" {
-						want = "gemini-4-argon"
+						want = "gemini-4-argon-low"
 					}
 					if got != want {
 						t.Errorf("model changed to %s", got)
@@ -156,7 +156,7 @@ func TestTrialPrefersUltraAndRestoresTrialOnFallback(t *testing.T) {
 				body, _ := io.ReadAll(r.Body)
 				model, _, _ := ExtractModelFromRequest(r, body)
 				if calls == 1 {
-					if model != "gemini-4-argon" || r.Header.Get("Authorization") != "Bearer ultra" {
+					if model != "gemini-4-argon-low" || r.Header.Get("Authorization") != "Bearer ultra" {
 						t.Errorf("Ultra preference/promotion failed: %s %s", model, r.Header.Get("Authorization"))
 					}
 					w.WriteHeader(403)
@@ -189,5 +189,25 @@ func TestTrialPrefersUltraAndRestoresTrialOnFallback(t *testing.T) {
 				t.Fatalf("status %d calls %d body %s", w.Code, calls, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestStreamingRequestPreservesJSONUpstreamError(t *testing.T) {
+	_, accounts, _, _ := setupTestDB(t)
+	_ = accounts.Create(context.Background(), &domain.Account{ID: "a", Email: "a@test.invalid", AccessToken: "test", IsActive: true, Status: domain.AccountStatusActive, TokenExpiry: time.Now().Add(time.Hour)})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"error":{"status":"NOT_FOUND"}}`))
+	}))
+	defer upstream.Close()
+	handler, err := NewProxyHandler(accounts, WithTargetURL(upstream.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("POST", "/v1internal:streamGenerateContent?alt=sse", strings.NewReader(`{"model":"gemini-flash"}`)))
+	if w.Code != 404 || !strings.Contains(w.Body.String(), "NOT_FOUND") {
+		t.Fatalf("swallowed error %d %s", w.Code, w.Body.String())
 	}
 }

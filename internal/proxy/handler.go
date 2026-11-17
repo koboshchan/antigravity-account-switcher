@@ -511,7 +511,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !isPassThrough && currentAcc != nil && entitlementModelKey(origModel) == "gemini-4-argon-trial" {
 			if repo, ok := h.failoverEngine.quotaRepo.(domain.SharedGeminiRepository); ok {
 				if shared, err := repo.GetSharedGemini(ctx, currentAcc.ID); err == nil && shared {
-					currentModel = "gemini-4-argon"
+					currentModel = "gemini-4-argon-low"
 					var rewriteErr error
 					if _, _, _, err := FindModelValueBounds(origBody); err == nil {
 						currentBody, rewriteErr = RewriteModelInBody(origBody, currentModel)
@@ -523,7 +523,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					currentPath = RewriteModelInPath(origPath, currentModel)
 					currentQuery = RewriteModelInQuery(origQuery, currentModel)
 					if h.eventBroadcaster != nil {
-						h.eventBroadcaster.Broadcast(&domain.ProxyEvent{Type: domain.EventTypeAccountSwitched, AccountID: currentAcc.ID, Message: "Ultra model rewrite: gemini-4-argon-trial to gemini-4-argon", Timestamp: time.Now().UTC()})
+						h.eventBroadcaster.Broadcast(&domain.ProxyEvent{Type: domain.EventTypeAccountSwitched, AccountID: currentAcc.ID, Message: "Ultra model rewrite: gemini-4-argon-trial to gemini-4-argon-low", Timestamp: time.Now().UTC()})
 					}
 				}
 			}
@@ -673,6 +673,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				isExhausted = true
 			} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound {
 				bodyBytes, _ = io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+				// Keep inspected bytes available for non-retried JSON errors.
+				resp.Body = struct {
+					io.Reader
+					io.Closer
+				}{io.MultiReader(bytes.NewReader(bodyBytes), resp.Body), resp.Body}
 				isThoughtSigErr := bytes.Contains(bodyBytes, []byte("Corrupted thought signature")) ||
 					bytes.Contains(bodyBytes, []byte("thought_signature")) ||
 					bytes.Contains(bodyBytes, []byte("thoughtSignature")) ||
@@ -774,7 +779,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Non-exhausted upstream response (e.g. 200 OK, 400, 500)
 		copyResponseHeaders(w.Header(), resp.Header)
 
-		isRespSSE := isSSE || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+		isRespSSE := resp.StatusCode >= 200 && resp.StatusCode < 300 && (isSSE || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream"))
 
 		w.WriteHeader(resp.StatusCode)
 
