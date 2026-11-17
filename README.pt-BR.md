@@ -132,4 +132,4 @@ Quando o Google exige verificação, a conta fica excluída de todas as família
 
 A consulta de cotas se identifica como cliente Antigravity hub 2.23 para receber o bucket semanal independente do Argon. Se um servidor de linguagem local antigo omitir Argon, o switcher consulta o resumo direto de cotas. Argon permanece desconhecido quando o Google não informa seu próprio bucket; percentuais genéricos do Gemini nunca são usados em seu lugar.
 
-Contas com consulta de cota ao vivo bem-sucedida que informa Gemini sem um grupo Argon separado recebem o selo Ultra. Argon compartilha as cotas Gemini de 5 horas e semanais, incluindo o bloqueio por limite de uso. Consultas com falha não estabelecem essa inferência; grupos Argon separados continuam independentes.
+Contas com consulta de cota ao vivo bem-sucedida que informa Gemini sem um grupo Argon separado recebem o selo Ultra. Argon e Carbon compartilham as cotas Gemini de 5 horas e semanais, incluindo o bloqueio por limite de uso. Consultas com falha não estabelecem essa inferência; grupos Argon separados continuam independentes.
