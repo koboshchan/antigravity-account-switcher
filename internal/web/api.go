@@ -725,7 +725,7 @@ func (a *APIHandler) familyQuotaViews(ctx context.Context, acc *domain.Account, 
 			view.Evidence = "Legacy exhaustion; no family-specific quota reported"
 		}
 		if shared {
-			view.Evidence = "Argon and Carbon included in the Gemini pool; topology confirmed by live quota poll"
+			view.Evidence = "Argon included in the Gemini pool; topology confirmed by live quota poll"
 		}
 		if !reset.IsZero() {
 			r := reset

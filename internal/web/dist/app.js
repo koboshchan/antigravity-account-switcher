@@ -452,7 +452,7 @@
         <div class="quota-group">
           <div class="quota-group-header">
             <span class="quota-group-name">Gemini Models</span>
-            <span class="quota-group-models">${isUltra ? 'Flash, Pro, Argon, Carbon' : 'Flash, Pro'}</span>
+            <span class="quota-group-models">${isUltra ? 'Flash, Pro, Argon' : 'Flash, Pro'}</span>
           </div>
           ${renderQuotaRow('5-Hour Sliding Limit', gemini5h)}
           ${renderQuotaRow('Weekly Sliding Limit', geminiWeekly)}
@@ -464,7 +464,7 @@
 
     if (!isUltra) quotaBodyHtml += `<div class="quota-group"><div class="quota-group-header"><span class="quota-group-name">Gemini 4 Argon</span><span class="quota-group-models">Independent quota</span></div>${argonBuckets.length ? argonBuckets.map(b => renderQuotaRow(b.display_name || b.bucket_id, b)).join('') : '<div class="text-xs text-muted">Unknown · Google has not reported Argon-specific quota.</div>'}</div>`;
 
-    if (isUltra) quotaBodyHtml += '<div class="quota-group"><div class="text-xs text-muted">Argon and Carbon included in the Gemini 5-hour and weekly pool.</div></div>';
+    if (isUltra) quotaBodyHtml += '<div class="quota-group"><div class="text-xs text-muted">Argon included in the Gemini 5-hour and weekly pool.</div></div>';
 
     if (acc.quota_unavailable) {
       quotaBodyHtml = '<div class="quota-group"><div class="text-danger">Quota unavailable</div><div class="text-xs text-muted">Quota endpoint permission denied. Cached percentages are hidden. A successful live quota poll is required before this account can route requests.</div></div>';
