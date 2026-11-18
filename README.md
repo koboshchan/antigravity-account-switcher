@@ -19,7 +19,7 @@
 
 ## About the project
 
-The switcher supervises Antigravity or wraps a CLI process with scoped proxy settings. It replaces upstream authorization with the selected pool account, polls Google Cloud Code PA for quota information, and rotates accounts when an upstream request hits a supported quota-exhaustion response. Buffered requests can be replayed before a response is sent to the client; an already-started stream cannot be transparently retried.
+The switcher supervises Antigravity or wraps a CLI process with scoped proxy settings. It replaces upstream authorization with the selected pool account, polls Google Cloud Code PA for quota information, and rotates accounts when an upstream request hits a supported quota-exhaustion response. Request bodies are buffered in memory up to 1 GiB (1,073,741,824 bytes) by default, so large concurrent requests can consume substantial RAM. Buffered requests can be replayed before a response is sent to the client; an already-started stream cannot be transparently retried.
 
 An embedded dashboard shows accounts, quotas, token usage, and live proxy events. The proxy switches accounts, never models. Account and model access still depend on Google permissions and quota.
 

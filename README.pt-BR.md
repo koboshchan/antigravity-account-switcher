@@ -11,7 +11,7 @@ Pool local de contas, painel de cotas em tempo real e proxy com alternância de 
 
 ## Sobre o projeto
 
-O switcher supervisiona o Antigravity ou executa uma CLI com configurações de proxy restritas ao processo. Substitui a autorização enviada ao serviço pela conta selecionada no pool, consulta cotas no Google Cloud Code PA e alterna contas ao receber respostas compatíveis de esgotamento de cota. Requisições armazenadas em memória podem ser repetidas antes do envio da resposta ao cliente; um stream já iniciado não pode ser repetido de forma transparente.
+O switcher supervisiona o Antigravity ou executa uma CLI com configurações de proxy restritas ao processo. Substitui a autorização enviada ao serviço pela conta selecionada no pool, consulta cotas no Google Cloud Code PA e alterna contas ao receber respostas compatíveis de esgotamento de cota. Corpos de requisição são armazenados em memória até 1 GiB (1.073.741.824 bytes) por padrão; requisições grandes simultâneas podem consumir muita RAM. Requisições armazenadas em memória podem ser repetidas antes do envio da resposta ao cliente; um stream já iniciado não pode ser repetido de forma transparente.
 
 O painel integrado mostra contas, cotas, uso de tokens e eventos do proxy. O proxy alterna contas, nunca modelos. Permissões e cotas do Google continuam determinando o acesso.
 
