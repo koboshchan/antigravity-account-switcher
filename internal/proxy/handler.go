@@ -408,6 +408,25 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isCloudCode := !isExplicitForwardToOther
 
 	origModel, _, _ := ExtractModelFromRequest(r, buffered.Bytes())
+	// Existing conversations may still send the Ultra ID after a subscription loss.
+	// Route them through the explicitly advertised Pro trial product when available.
+	if isCloudCode && h.failoverEngine != nil && h.failoverEngine.argonTrialFallback(ctx, origModel) {
+		const trial = "gemini-4-argon-trial"
+		if _, _, _, err := FindModelValueBounds(buffered.Body); err == nil {
+			body, err := RewriteModelInBody(buffered.Body, trial)
+			if err != nil {
+				http.Error(w, "Could not select Argon trial", 500)
+				return
+			}
+			buffered.Body = body
+		}
+		r = r.Clone(ctx)
+		r.URL.Path = RewriteModelInPath(r.URL.Path, trial)
+		r.URL.RawPath = ""
+		r.URL.RawQuery = RewriteModelInQuery(r.URL.RawQuery, trial)
+		origModel = trial
+	}
+
 	var currentAcc *domain.Account
 	isPassThrough := false
 

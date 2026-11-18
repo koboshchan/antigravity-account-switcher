@@ -137,3 +137,5 @@ Contas com consulta de cota ao vivo bem-sucedida que informa Gemini sem um grupo
 Requisições Carbon usam apenas contas Ultra confirmadas com cota Gemini disponível. Sem conta elegível, o proxy retorna HTTP 429 sem tentar contas de Argon independente ou nível desconhecido. O roteamento Argon permanece inalterado.
 
 Argon normal e Carbon exigem conta Ultra confirmada com cota Gemini disponível. Pedidos explícitos de `gemini-4-argon-trial` preferem Ultra e usam `gemini-4-argon-low` no upstream, com evento no painel. Contas não Ultra mantêm o ID trial. A resposta estruturada `403 SUBSCRIPTION_REQUIRED` exclui temporariamente a conta para o modelo rejeitado e tenta outra conta sem bloquear modelos diferentes. A exclusão dura 30 minutos no processo atual.
+
+Quando nenhuma conta Ultra elegível permanece, solicitações Argon normais (base, low ou high) usam `gemini-4-argon-trial` em contas Pro com cota `gemini-argon-wtu-weekly` disponível. Carbon nunca usa esse fallback. Contas desativadas ou bloqueadas continuam excluídas.

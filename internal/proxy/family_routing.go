@@ -111,6 +111,29 @@ func (f *FailoverEngine) ResolveForModel(ctx context.Context, model string) (*do
 			}
 		}
 	}
+
+	// Prefer advertised trial quota over unknown legacy accounts.
+	if entitlementModelKey(model) == "gemini-4-argon-trial" && f.quotaRepo != nil {
+		if accounts, err := f.accountRepo.List(ctx); err == nil {
+			for _, acc := range accounts {
+				if !f.familyEligibleLocked(ctx, acc, model) {
+					continue
+				}
+				buckets, err := f.quotaRepo.GetByAccountID(ctx, acc.ID)
+				if err != nil {
+					continue
+				}
+				for _, b := range buckets {
+					if b.BucketID == "gemini-argon-wtu-weekly" {
+						if err := f.setActiveForModelLocked(ctx, model, acc.ID); err != nil {
+							return nil, err
+						}
+						return acc, nil
+					}
+				}
+			}
+		}
+	}
 	active, err := f.activeForModelLocked(ctx, model)
 	// Model-less legacy traffic has no family to preflight; preserve transparent
 	// upstream exhaustion responses, but never adopt disabled or auth-error rows.
@@ -250,4 +273,41 @@ func (f *FailoverEngine) setActiveForModelLocked(ctx context.Context, model, id 
 	}
 	f.familyActive[family] = id
 	return nil
+}
+
+// argonTrialFallback requires affirmative Pro trial quota, not just Gemini quota.
+// Keep normal Argon when any eligible Ultra can serve it; Carbon never falls back.
+func (f *FailoverEngine) argonTrialFallback(ctx context.Context, model string) bool {
+	switch entitlementModelKey(model) {
+	case "gemini-4-argon", "gemini-4-argon-low", "gemini-4-argon-high":
+	default:
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	accounts, err := f.accountRepo.List(ctx)
+	if err != nil || f.quotaRepo == nil {
+		return false
+	}
+	for _, acc := range accounts {
+		if f.familyEligibleLocked(ctx, acc, model) {
+			return false
+		}
+	}
+	for _, acc := range accounts {
+		if f.accountQuotaFamilyLocked(ctx, acc.ID, "gemini-4-argon-trial") != domain.QuotaFamilyArgon ||
+			!f.familyEligibleLocked(ctx, acc, "gemini-4-argon-trial") {
+			continue
+		}
+		buckets, err := f.quotaRepo.GetByAccountID(ctx, acc.ID)
+		if err != nil {
+			continue
+		}
+		for _, b := range buckets {
+			if b.BucketID == "gemini-argon-wtu-weekly" && (!b.IsExhausted() || b.HasReset(time.Now())) {
+				return true
+			}
+		}
+	}
+	return false
 }
