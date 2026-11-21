@@ -1,49 +1,14 @@
-<a id="readme-top"></a>
+# Antigravity Account Switcher
 
-[![Contributors][contributors-shield]][contributors-url]
-[![Stars][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-[![CI][ci-shield]][ci-url]
+A local account pool, quota dashboard, and failover proxy for Antigravity and `agy`. Run your agent through the switcher to use eligible pool accounts when one runs out of quota.
 
-<div align="center">
-  <h1>Antigravity Account Switcher</h1>
-  <p>A local multi-account pool, live quota dashboard, and HTTP 429 failover proxy for Antigravity and agy.</p>
-  <p><a href="#getting-started">Install</a> · <a href="#usage">Usage</a> · <a href="https://github.com/koboshchan/antigravity-account-switcher/issues">Report an issue</a></p>
-</div>
+[Get started](#get-started) · [Run your agent](#run-your-agent) · [Quota routing](#quota-routing) · [Troubleshooting](#troubleshooting)
 
-<details>
-  <summary>Contents</summary>
-  <p><a href="#about-the-project">About</a> · <a href="#fork-changes">Fork changes</a> · <a href="#getting-started">Getting started</a> · <a href="#usage">Usage</a> · <a href="#storage-and-safety">Storage and safety</a> · <a href="#contributing">Contributing</a> · <a href="#license-and-credits">License and credits</a></p>
-</details>
+This is [koboshchan's fork](https://github.com/koboshchan/antigravity-account-switcher) of [Muriel Gasparini's original project](https://github.com/Muriel-Gasparini/antigravity-account-switcher), under the [MIT license](LICENSE). The upstream copyright notice is preserved.
 
-## About the project
+## Get started
 
-The switcher supervises Antigravity or wraps a CLI process with scoped proxy settings. It replaces upstream authorization with the selected pool account, polls Google Cloud Code PA for quota information, and rotates accounts when an upstream request hits a supported quota-exhaustion response. Request bodies are buffered in memory up to 1 GiB (1,073,741,824 bytes) by default, so large concurrent requests can consume substantial RAM. Buffered requests can be replayed before a response is sent to the client; an already-started stream cannot be transparently retried.
-
-An embedded dashboard shows accounts, quotas, token usage, and live proxy events. The proxy switches accounts, never models. Account and model access still depend on Google permissions and quota.
-
-Built with Go 1.24+, pure-Go SQLite (`modernc.org/sqlite`), and embedded HTML, CSS, and JavaScript. No Node build or runtime C library is required.
-
-## Fork changes
-
-This fork tracks [Muriel Gasparini's original project](https://github.com/Muriel-Gasparini/antigravity-account-switcher).
-
-The standalone `refresh-quotas` command now wires up the OAuth token refresher, so expired access tokens can be renewed instead of being polled without refresh support. During migration, stale error states were cleared only after successful refresh and quota checks. That was a one-time local repair, not an automatic reset of every error account.
-
-The proxy preserves the requested model rather than selecting a primary or secondary model. Body, path, and query model IDs pass through, including Argon, Hydrogen, Helium, and future IDs. Regression tests cover these cases. This does not grant access to models absent from an account's Google catalog.
-
-Primary/secondary model settings and model fallback have been removed from the dashboard, configuration and request path. Legacy saved model-routing fields are ignored and are not written back when configuration is saved.
-
-The dashboard has system-font light and dark themes, a persistent theme switch, and a responsive frosted-card layout. No screenshots in this README use real account data.
-
-Quota routing is family-specific. An empty Claude/GPT window does not disqualify an account from Gemini requests, or vice versa. Every applicable window must have quota; a full 5-hour window does not override an exhausted weekly window. Family cooldowns persist with reset times and are reconciled by successful live quota polls. Authentication errors and manually disabled accounts remain excluded. Argon has its own family, separate from other Gemini models. The CLI and dashboard show Argon quota only when Google returns Argon-specific data; otherwise they show unknown. A quota-endpoint HTTP 403 marks the account unavailable across all models and hides its quota numbers until a later successful poll. Recovery never overrides a manual disable or authentication error.
-
-Each family keeps its own persisted active account. Requests use that family’s account token, and a 429 or exhausted quota automatically selects the next eligible account for that family without moving the other families. The CLI’s `status` and `refresh-quotas` output and the dashboard identify each family’s selected account. Unknown or model-less traffic retains the legacy active-account behavior.
-
-## Getting started
-
-Use Linux or WSL with Git, Make, Go 1.24 or newer, and an existing Antigravity or `agy` installation.
+Use Linux or WSL with Go 1.24+, Git, Make, and an existing Antigravity or `agy` installation.
 
 ```sh
 git clone https://github.com/koboshchan/antigravity-account-switcher.git
@@ -53,110 +18,123 @@ export PATH="$HOME/.local/bin:$PATH"
 antigravity-account-switcher version
 ```
 
-`make install` builds with `CGO_ENABLED=0` and installs to `~/.local/bin/antigravity-account-switcher`.
+The switcher is one Go binary with pure-Go SQLite and an embedded dashboard. There is no Node build step. `make install` builds with `CGO_ENABLED=0` and installs to `~/.local/bin`.
 
-Add accounts through browser OAuth; repeat for each account in the pool.
+Connect a Google account through browser OAuth, then repeat for the rest of your pool.
 
 ```sh
 antigravity-account-switcher add-account
-# Print the OAuth URL rather than opening a browser automatically
-antigravity-account-switcher add-account --no-browser
+antigravity-account-switcher refresh-quotas
 ```
 
-When adding an account from another computer, the Google redirect may point to a loopback address on that computer instead of the switcher host. Copy the full callback URL from the address bar into the pending Add Account dialog’s callback field. The switcher validates the pending login and completes the token exchange locally; it does not fetch arbitrary pasted URLs. Wait for account-save confirmation before closing the dialog.
+Use `add-account --no-browser` to print the sign-in URL without opening a browser. You can also connect accounts from **Add Account** in the dashboard.
 
-On first startup with an empty pool, supported ACP token files can be auto-imported from `~/.gemini/antigravity-acp/acp_token.json` or `~/.gemini/antigravity-cli/acp_token.json`. There is no general agy-swap bulk-import command.
+When the pool is empty, startup can import an existing ACP token from `~/.gemini/antigravity-acp/acp_token.json` or `~/.gemini/antigravity-cli/acp_token.json`. There is no general agy-swap bulk importer.
 
-## Usage
+## Run your agent
 
-Start a new supervised Antigravity session.
+Launch Antigravity with its proxy supervisor and open the dashboard.
 
 ```sh
 antigravity-account-switcher launch --open
-# Override executable discovery
-antigravity-account-switcher launch --bin /path/to/antigravity
-# Choose a different fixed dashboard port
-antigravity-account-switcher launch --dashboard-port 8081
 ```
 
-Wrap the real CLI executable instead of an account-switching shell wrapper. The following path is an example installation location; use your own executable if different.
+Override executable discovery or use a different dashboard port when needed.
+
+```sh
+antigravity-account-switcher launch --bin /path/to/antigravity --dashboard-port 8081
+```
+
+For a CLI, wrap the real executable, not an account-switching shell wrapper. Replace this example path with your installation's executable.
 
 ```sh
 antigravity-account-switcher wrap -- ~/.local/libexec/agy
 ```
 
-Run only the proxy and dashboard, without launching Antigravity.
+Both commands start the proxy and dashboard at `http://127.0.0.1:8080` by default. `wrap` also accepts `--dashboard-port` before `--`. The child receives scoped `HTTP_PROXY`, `HTTPS_PROXY`, and `CLOUD_CODE_URL` settings; your shell's environment is unchanged.
+
+To run just the proxy and dashboard, without starting an agent, use this instead.
 
 ```sh
 antigravity-account-switcher serve --port 8080
 ```
 
-The dashboard always binds to `127.0.0.1` and defaults to fixed port 8080, including `launch` and `wrap`. Use `--dashboard-port` with `launch` or `wrap`, or `--port` with `serve`, to override the saved port. The precedence is command-line flag (the last alias wins), `ANTIGRAVITY_PORT`, saved configuration, then 8080. An occupied port produces an error rather than silently choosing another port. Open `http://127.0.0.1:8080` when using the default. `serve` alone does not attach to or reconfigure an existing agent process.
+The dashboard shows accounts, per-family quota windows, selected accounts, token usage, and live proxy events. It includes light and dark themes. `serve` alone does not reroute an already-running agent.
 
-Inspect the pool or synchronize quotas without launching an agent.
+> [!IMPORTANT]
+> `launch` and `wrap` couple the agent's lifetime to the supervisor. Stopping the supervisor can terminate its child. Do not restart it during a long-running job just to update the binary.
+
+## Quota routing
+
+Gemini, Claude/GPT, and Argon keep separate active-account selections. Exhausting Claude/GPT does not block an account's available Gemini quota. Every applicable quota window must have capacity; a full 5-hour window does not cancel an exhausted weekly window.
+
+The proxy replaces upstream authorization with the selected account's token. Supported rate-limit and quota-exhaustion responses trigger account rotation and request replay before the response reaches the client. It cannot transparently retry a stream that has already started.
+
+Argon and Carbon have specific routing rules in this fork.
+
+| Request | Routing |
+| --- | --- |
+| Normal Argon | Prefers eligible Ultra accounts. If none remain, base/low/high IDs can use `gemini-4-argon-trial` on Pro accounts with available `gemini-argon-wtu-weekly` quota. |
+| `gemini-4-argon-trial` | Prefers eligible Ultra accounts and becomes `gemini-4-argon-low` upstream. On non-Ultra accounts it keeps the trial ID, preferring advertised trial quota. |
+| Carbon | Requires an eligible Ultra account with measured Gemini capacity. No Pro fallback; returns HTTP 429 when none qualify. |
+
+"Ultra" is the switcher's inference from a successful live quota poll reporting Gemini quota without a separate Argon bucket, not a subscription lookup. On those accounts, Argon and Carbon share Gemini's measured 5-hour and weekly limits. Separately reported Argon quotas remain independent. Missing Argon data otherwise displays as unknown, not a guessed percentage.
+
+Other model IDs pass through unchanged; there is no configurable primary/secondary model fallback. Model access still depends on Google's permissions. A structured `403 SUBSCRIPTION_REQUIRED` temporarily excludes the rejected account/model pair for 30 minutes in the running process, without blocking unrelated models.
+
+Family cooldowns persist and successful quota polls reconcile them. Manually disabled accounts and authentication-error accounts stay excluded. A quota-endpoint HTTP 403 blocks the account across families and hides cached percentages until a successful live poll.
+
+> [!WARNING]
+> Request bodies are buffered in RAM for replay, up to 1 GiB per request. Large concurrent requests can use substantial memory.
+
+## Inspect and configure
 
 ```sh
 antigravity-account-switcher list-accounts
-antigravity-account-switcher refresh-quotas
 antigravity-account-switcher status
+antigravity-account-switcher refresh-quotas
 antigravity-account-switcher config list
 antigravity-account-switcher config set antigravity_bin /path/to/antigravity
+antigravity-account-switcher config set port 8081
 ```
 
-Run `antigravity-account-switcher help` or a command's `--help` for flags. Configuration uses `config list`, `config get <key>`, and `config set <key> <value>`.
+Background quota polling defaults to every five minutes. `refresh-quotas` forces a refresh and distinguishes successful live refreshes from cached or unverified data. It skips manually disabled accounts. Use `status` or `refresh-quotas` for family-specific selections and quota evidence.
 
-## Storage and safety
+The default directory is `~/.config/antigravity-account-switcher/`, containing `config.json` and the credential-bearing `accounts.db`. Use `ANTIGRAVITY_CONFIG_DIR` for another directory, or `ANTIGRAVITY_DB_PATH` / a command's `--db` flag for another database.
 
-The default directory is `~/.config/antigravity-account-switcher/`, containing `config.json` and `accounts.db`. `ANTIGRAVITY_CONFIG_DIR`, `ANTIGRAVITY_DB_PATH`, or command-specific `--db` flags can select separate storage.
+The listening port follows command-line flags, then `ANTIGRAVITY_PORT`, saved configuration, and finally 8080. It always binds to `127.0.0.1` and fails if the requested port is occupied instead of silently picking another one.
 
-The SQLite database contains OAuth credentials. Keep it private; do not commit databases, token files, or credential-bearing configuration. Keep the dashboard bound to localhost, and use an SSH tunnel for remote access.
+Run `antigravity-account-switcher help` or a command's `--help` for more options. Configuration supports `list`, `get <key>`, and `set <key> <value>`.
 
-`launch` and `wrap` supervise the child process lifecycle. Exiting their supervisor can terminate its child. Do not restart a supervisor during a long-running job just to update the binary or dashboard.
+## Troubleshooting
 
-## Contributing
+**Google verification required**
 
-Open an [issue](https://github.com/koboshchan/antigravity-account-switcher/issues) or submit a focused pull request against this fork. Read [AGENTS.md](AGENTS.md) before changing code.
+Open **Verify with Google** on the account's dashboard card and complete Google's check. Then choose **Refresh Quotas** or run `antigravity-account-switcher refresh-quotas`. The CLI also prints a validated Google verification link when one is available; links never open automatically.
+
+Verification blocks that account across all families without changing its manual or authentication state. Only a successful direct Google quota recheck clears the requirement. Cached/local quota data and reset timers cannot clear it. A generic quota-endpoint 403 is a separate unavailable state.
+
+**Adding an account from another computer**
+
+Access the dashboard through an SSH tunnel. If Google's redirect lands on an unreachable loopback URL on your browser's computer, paste the full callback URL into the pending **Add Account** dialog's callback field. Keep the dialog open until account-save confirmation. The switcher validates the pending login and exchanges the code locally; it does not fetch the pasted URL.
+
+**The port is already in use**
+
+Stop the instance you no longer need, or choose another port with `launch --dashboard-port 8081`, `wrap --dashboard-port 8081 -- <command>`, or `serve --port 8081`.
+
+> [!CAUTION]
+> The SQLite database contains OAuth credentials. Keep it and token files private, and do not commit them. Do not expose the dashboard publicly; use an SSH tunnel for remote access.
+
+## Development
+
+Read [AGENTS.md](AGENTS.md) before changing code. Race tests need a C compiler; the release binary does not.
 
 ```sh
-make fmt
 make lint
 make test-race
 make build-static
 ```
 
-Race tests require a C compiler; release binaries do not.
+Report bugs in this fork's [issue tracker](https://github.com/koboshchan/antigravity-account-switcher/issues).
 
-## License and credits
-
-Distributed under the [MIT License](LICENSE). The upstream license and Muriel Gasparini's copyright notice are preserved unchanged.
-
-Original implementation by [Muriel Gasparini](https://github.com/Muriel-Gasparini/antigravity-account-switcher). Fork maintained at [koboshchan/antigravity-account-switcher](https://github.com/koboshchan/antigravity-account-switcher).
-
-README structure adapted from [othneildrew/Best-README-Template](https://github.com/othneildrew/Best-README-Template/blob/master/BLANK_README.md). The template's MIT license is available [here](https://github.com/othneildrew/Best-README-Template/blob/master/LICENSE.txt).
-
-<p align="right"><a href="#readme-top">Back to top</a></p>
-
-[contributors-shield]: https://img.shields.io/github/contributors/koboshchan/antigravity-account-switcher
-[contributors-url]: https://github.com/koboshchan/antigravity-account-switcher/graphs/contributors
-[stars-shield]: https://img.shields.io/github/stars/koboshchan/antigravity-account-switcher
-[stars-url]: https://github.com/koboshchan/antigravity-account-switcher/stargazers
-[issues-shield]: https://img.shields.io/github/issues/koboshchan/antigravity-account-switcher
-[issues-url]: https://github.com/koboshchan/antigravity-account-switcher/issues
-[license-shield]: https://img.shields.io/github/license/koboshchan/antigravity-account-switcher
-[license-url]: https://github.com/koboshchan/antigravity-account-switcher/blob/main/LICENSE
-[ci-shield]: https://github.com/koboshchan/antigravity-account-switcher/actions/workflows/ci.yml/badge.svg
-[ci-url]: https://github.com/koboshchan/antigravity-account-switcher/actions/workflows/ci.yml
-
-### Google account verification
-
-When Google requires verification, the account is excluded from every model family without changing manual disabled or authentication-error settings. Open **Verify with Google** on its dashboard card, complete the check, then choose **Refresh Quotas** or run `antigravity-account-switcher refresh-quotas`. The CLI also prints Google's validated verification link. Links are never opened automatically. Only a later successful direct Google quota recheck clears the requirement; cached/local quotas, reset timers, and unrelated successful requests do not. Generic quota-endpoint 403 unavailability remains a separate state.
-
-Quota polling identifies as the Antigravity hub 2.23 client so Google can return its independent Argon weekly bucket. If an older local language server omits Argon, the switcher queries the direct quota summary. Argon stays unknown when Google does not explicitly report its own bucket; generic Gemini percentages are never substituted.
-
-Accounts with a successful live quota poll reporting Gemini quota but no separate Argon bucket are marked Ultra. Argon and Carbon share the measured Gemini 5-hour and weekly pool, including reactive rate-limit cooldowns. Failed polls never establish this inference; separately reported Argon pools remain independent.
-
-Carbon requests are restricted to live-confirmed Ultra accounts with measured Gemini capacity. If none are eligible, the proxy returns HTTP 429 without trying independent-Argon or unknown-tier accounts. Argon routing is unchanged.
-
-Normal Argon prefers a live-confirmed Ultra account with measured Gemini capacity; Carbon requires one. Explicit `gemini-4-argon-trial` requests prefer eligible Ultra accounts and are promoted to `gemini-4-argon-low` upstream, with a dashboard rewrite event. Non-Ultra accounts retain the requested trial ID. A structured upstream `403 SUBSCRIPTION_REQUIRED` temporarily excludes that account for the rejected model and rotates without blocking unrelated models. License exclusions last 30 minutes in the running process.
-
-When no eligible Ultra remains, existing conversations requesting normal Argon IDs (base, low, or high) use `gemini-4-argon-trial` on Pro accounts advertising available `gemini-argon-wtu-weekly` quota. Explicit trial requests prefer that quota over unknown-tier accounts. Carbon never falls back to Pro. Disabled or quota-blocked accounts remain excluded.
+The earlier README used [Best-README-Template](https://github.com/othneildrew/Best-README-Template), available under its [MIT license](https://github.com/othneildrew/Best-README-Template/blob/master/LICENSE.txt).
